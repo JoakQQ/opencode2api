@@ -23,7 +23,7 @@ L'eseguibile include la WebUI: per eseguire il servizio non servono Node.js né 
 - Creazione, denominazione, abilitazione, disabilitazione ed eliminazione immediata di API key locali.
 - Gruppi di modelli `sota` / `sweet` con affinità, ordinamento, failover, protezione dello streaming e stato persistente.
 
-Consulta la [guida della console di gestione (in cinese)](docs/management.zh-CN.md) per informazioni sulle nuove pagine e sulla configurazione.
+Consulta la [guida della console di gestione](docs/management.md) per informazioni sulle nuove pagine e sulla configurazione.
 
 ## Avvio rapido
 
@@ -78,7 +78,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-Il container esegue il servizio con un utente non privilegiato. Compose usa un filesystem root in sola lettura, un volume di stato scrivibile e un filesystem temporaneo `/tmp`.
+Il container esegue il servizio con un utente non privilegiato. Compose usa un filesystem root in sola lettura, un volume di stato scrivibile e un filesystem temporaneo `/tmp`. Il database di telemetria si trova nel volume separato `opencode2api-storage` montato su `/storage`, la directory predefinita di `storage.path`; includilo nel backup insieme al volume di stato.
 
 WARP richiede solo UDP in uscita (endpoint Cloudflare, porta `2408`), quindi la configurazione dell'immagine senza privilegi e senza `NET_ADMIN` funziona così com'è; non serve passare a host networking né aggiungere `--cap-add`. Se la rete del container blocca UDP, l'abilitazione di WARP fallisce all'avvio.
 
@@ -446,7 +446,7 @@ Per aggiungere una lingua, inserisci un blocco in `DICTIONARY` in `webui/js/i18n
 
 Il server convalida una configurazione candidata e prepara un gateway sostitutivo prima di salvare e attivare le modifiche. Se la convalida o il salvataggio falliscono, il gateway attivo resta invariato. Le richieste già in corso continuano sul gateway originale.
 
-Chiavi, proxy, URL upstream, retry, impostazioni dei modelli, log e preferenze di instradamento si applicano subito alle nuove richieste. Le modifiche a `listen`, `webui.listen` o `webui.enabled` richiedono il riavvio del processo. Il JSON salvato è normalizzato e non conserva i commenti.
+Chiavi, proxy, URL upstream, retry, impostazioni dei modelli, log e preferenze di instradamento si applicano subito alle nuove richieste. Le modifiche a `listen`, `webui.listen`, `webui.enabled`, `storage.enabled` o `storage.path` richiedono il riavvio del processo. Il JSON salvato è normalizzato e non conserva i commenti.
 
 ## Monitoraggio e persistenza
 
@@ -454,7 +454,7 @@ L'esito di una richiesta descrive l'inferenza completata. Una risposta SSE non r
 
 I record dei **tentativi** upstream misurano lo scambio HTTP fino alla ricezione degli header della risposta. Esito e latenza sono separati dal completamento dell'intero body JSON o dello stream.
 
-Le statistiche dei token usano solo i valori riportati. I token input includono letture e scritture della cache; i token cache separati contano le letture. I valori mancanti non vengono stimati; la copertura indica quante richieste di inferenza instradate riportano l'utilizzo. `usage.server_keys` suddivide richieste e token in base alla chiave server locale usata per l'autenticazione (la relativa impronta è mostrata in `/api/api-keys`); il traffico Playground è conteggiato sotto `playground`.
+Le statistiche dei token usano solo i valori riportati. I token input includono letture e scritture della cache; i token cache separati contano le letture. I valori mancanti non vengono stimati; la copertura indica quante richieste di inferenza instradate riportano l'utilizzo. `usage.window.server_keys` (la finestra scelta nella scheda Usage) e `usage.lifetime.server_keys` suddividono richieste e token in base alla chiave server locale usata per l'autenticazione (la relativa impronta è mostrata in `/api/api-keys`); il traffico Playground è conteggiato sotto `playground`.
 
 | Dati                                                     | Memorizzazione / conservazione                                                       |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |

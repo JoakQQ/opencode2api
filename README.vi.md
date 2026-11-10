@@ -25,7 +25,7 @@ File thực thi đã bao gồm WebUI. Việc chạy dịch vụ không cần Nod
 
 Giao diện quản trị hỗ trợ **简体中文** (mặc định), **English**, **Tiếng Việt** và **Italiano**; lựa chọn được lưu trong trình duyệt và không làm thay đổi bản gốc.
 
-Xem [hướng dẫn bảng điều khiển quản trị (tiếng Trung)](docs/management.zh-CN.md) để biết các trang mới và tuỳ chọn cấu hình.
+Xem [hướng dẫn bảng điều khiển quản trị](docs/management.md) để biết các trang mới và tuỳ chọn cấu hình.
 
 ## Bắt đầu nhanh
 
@@ -80,7 +80,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-Container chạy dịch vụ bằng user không có đặc quyền. Compose dùng hệ thống file gốc chỉ đọc, volume trạng thái ghi được và hệ thống file tạm `/tmp`.
+Container chạy dịch vụ bằng user không có đặc quyền. Compose dùng hệ thống file gốc chỉ đọc, volume trạng thái ghi được và hệ thống file tạm `/tmp`. Cơ sở dữ liệu telemetry nằm trong volume riêng `opencode2api-storage` gắn tại `/storage` — thư mục mặc định của `storage.path` — nên hãy sao lưu cùng volume trạng thái.
 
 WARP chỉ cần UDP ra ngoài (endpoint Cloudflare, cổng `2408`), nên thiết lập user thường, không `NET_ADMIN` của image vẫn dùng được; không cần chuyển sang host networking hay thêm `--cap-add`. Nếu mạng container chặn UDP, việc bật WARP sẽ thất bại lúc khởi động.
 
@@ -456,7 +456,7 @@ Thêm một ngôn ngữ mới chỉ cần thêm một khối vào `DICTIONARY` t
 
 Máy chủ kiểm tra một cấu hình ứng viên và dựng gateway thay thế trước khi lưu và chuyển đổi. Kiểm tra hoặc lưu thất bại sẽ giữ nguyên gateway đang hoạt động. Các request đang chạy vẫn tiếp tục trên gateway gốc của chúng.
 
-Key, proxy, URL upstream, thiết lập retry, thiết lập mô hình, nhật ký và tuỳ chọn định tuyến có hiệu lực ngay với request mới. Thay đổi `listen`, `webui.listen` hoặc `webui.enabled` cần khởi động lại tiến trình. JSON đã lưu được chuẩn hoá; chú thích không được giữ lại.
+Key, proxy, URL upstream, thiết lập retry, thiết lập mô hình, nhật ký và tuỳ chọn định tuyến có hiệu lực ngay với request mới. Thay đổi `listen`, `webui.listen`, `webui.enabled`, `storage.enabled` hoặc `storage.path` cần khởi động lại tiến trình. JSON đã lưu được chuẩn hoá; chú thích không được giữ lại.
 
 ## Giám sát và lưu trữ
 
@@ -464,7 +464,7 @@ Kết quả request mô tả lần suy luận đã hoàn tất. Một phản h�
 
 Bản ghi **lần thử** upstream đo trao đổi HTTP tính tới lúc nhận được header phản hồi. Thành công và độ trễ của nó tách biệt với việc hoàn tất toàn bộ body JSON hoặc luồng.
 
-Thống kê token chỉ dùng usage được báo. Token input bao gồm đọc và ghi cache; token cache riêng đếm các lần đọc cache. Usage thiếu không được ước tính, và độ phủ cho biết bao nhiêu request suy luận đã định tuyến có báo usage. `usage.server_keys` tách request và token theo server key cục bộ mà caller đã xác thực (vân tay của nó, như hiển thị ở `/api/api-keys`); lưu lượng Playground được tính dưới mục `playground`.
+Thống kê token chỉ dùng usage được báo. Token input bao gồm đọc và ghi cache; token cache riêng đếm các lần đọc cache. Usage thiếu không được ước tính, và độ phủ cho biết bao nhiêu request suy luận đã định tuyến có báo usage. `usage.window.server_keys` (cửa sổ đang chọn ở tab Usage) và `usage.lifetime.server_keys` tách request và token theo server key cục bộ mà caller đã xác thực (vân tay của nó, như hiển thị ở `/api/api-keys`); lưu lượng Playground được tính dưới mục `playground`.
 
 | Dữ liệu                                                  | Lưu trữ / thời gian giữ                                        |
 | -------------------------------------------------------- | -------------------------------------------------------------- |

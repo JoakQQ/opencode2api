@@ -23,7 +23,7 @@ The executable includes the WebUI. Running the service requires no Node.js runti
 - Local API key creation, naming, enabling, disabling, and deletion with immediate updates.
 - Sticky `sota` / `sweet` model groups with ordering, failure fallback, streaming protection, and persisted state.
 
-See the [management console guide (Chinese)](docs/management.zh-CN.md) for the new pages and configuration.
+See the [management console guide](docs/management.md) for the new pages and configuration.
 
 ## Quick start
 
@@ -78,7 +78,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-The container runs the service as an unprivileged user. Compose uses a read-only root filesystem, a writable state volume, and a temporary `/tmp` filesystem.
+The container runs the service as an unprivileged user. Compose uses a read-only root filesystem, a writable state volume, and a temporary `/tmp` filesystem. The telemetry database lives in the separate `opencode2api-storage` volume mounted at `/storage` — the default `storage.path` directory — so back it up together with the state volume.
 
 WARP needs only outbound UDP (Cloudflare endpoint port `2408`), so the image's non-root, no-`NET_ADMIN` setup still works; do not switch to host networking or add `--cap-add` for it. If the container network blocks UDP, enabling WARP fails at startup.
 
@@ -467,7 +467,7 @@ To add a language, add one block to `DICTIONARY` in `webui/js/i18n.js`, then reg
 
 The server validates a candidate configuration and builds its replacement gateway before saving and switching. Failed validation or persistence leaves the active gateway in place. Requests already running continue on their original gateway.
 
-Keys, proxies, upstream URLs, retry settings, model settings, logging, and routing preferences apply to new requests immediately. Changes to `listen`, `webui.listen`, or `webui.enabled` require a process restart. Saved JSON is normalized; comments are not retained.
+Keys, proxies, upstream URLs, retry settings, model settings, logging, and routing preferences apply to new requests immediately. Changes to `listen`, `webui.listen`, `webui.enabled`, `storage.enabled`, or `storage.path` require a process restart. Saved JSON is normalized; comments are not retained.
 
 ## Monitoring and persistence
 
@@ -475,7 +475,7 @@ Request outcomes describe the completed inference. A failed SSE response or trun
 
 Upstream **attempt** records measure the HTTP exchange through receipt of response headers. Their success and latency are separate from completion of the full JSON body or stream.
 
-Token statistics use reported usage only. Input tokens include cache reads and writes; cached tokens separately count cache reads. Missing usage is not estimated, and coverage shows how many routed inference requests reported usage. `usage.server_keys` splits requests and tokens by the local server key the caller authenticated with (its fingerprint, as shown in `/api/api-keys`); Playground traffic is counted under `playground`.
+Token statistics use reported usage only. Input tokens include cache reads and writes; cached tokens separately count cache reads. Missing usage is not estimated, and coverage shows how many routed inference requests reported usage. `usage.window.server_keys` (the window selected in the Usage tab) and `usage.lifetime.server_keys` split requests and tokens by the local server key the caller authenticated with (its fingerprint, as shown in `/api/api-keys`); Playground traffic is counted under `playground`.
 
 | Data                                                      | Storage / retention                                                                          |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |

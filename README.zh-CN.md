@@ -23,7 +23,7 @@ WebUI 内嵌在可执行文件中，运行服务无需 Node.js 或数据库。
 - API Key 生成、自定义、命名、启停和删除，变更立即生效。
 - `sota` / `sweet` 分组别名，支持模型排序、故障切换、流式输出保护和状态恢复。
 
-新增页面及调用示例见[管理控制台说明](docs/management.zh-CN.md)。
+新增页面及调用示例见[管理控制台说明（英文）](docs/management.md)。
 
 ## 快速开始
 
@@ -78,7 +78,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-容器内的服务进程使用普通用户运行。Compose 启用只读根文件系统，并提供可写状态卷和临时 `/tmp` 文件系统。
+容器内的服务进程使用普通用户运行。Compose 启用只读根文件系统，并提供可写状态卷和临时 `/tmp` 文件系统。遥测数据库位于独立挂载到 `/storage` 的 `opencode2api-storage` 卷（默认 `storage.path` 目录）；备份时请连同状态卷一并进行。
 
 WARP 只需要出站 UDP（Cloudflare 端点端口 `2408`），因此镜像的普通用户、无 `NET_ADMIN` 配置无需改动；不要为此改用 host 网络或添加 `--cap-add`。如果容器网络禁止 UDP，启用 WARP 会在启动时失败。
 
@@ -461,7 +461,7 @@ WebUI 从 `webui/js/i18n.js` 加载翻译，内置 **简体中文**（默认）�
 
 服务先验证候选配置并创建新的 Gateway，然后保存配置并切换实例。验证或保存失败时，当前 Gateway 继续处理请求；已经开始的请求继续使用原有实例。
 
-Key、代理、上游地址、重试、模型、日志和路由偏好立即对新请求生效。`listen`、`webui.listen`、`webui.enabled` 的修改需要重启进程。保存后的 JSON 会规范化，不保留原有注释。
+Key、代理、上游地址、重试、模型、日志和路由偏好立即对新请求生效。`listen`、`webui.listen`、`webui.enabled`、`storage.enabled`、`storage.path` 的修改需要重启进程。保存后的 JSON 会规范化，不保留原有注释。
 
 ## 监控与持久化
 
@@ -469,7 +469,7 @@ Key、代理、上游地址、重试、模型、日志和路由偏好立即对�
 
 上游**尝试记录**统计的是收到响应头为止的 HTTP 交互，其成功状态和耗时与完整 JSON 响应或流的最终完成情况分开计算。
 
-Token 统计仅使用上游报告的 usage。输入 Token 包含缓存读取和写入，缓存 Token 单独统计缓存读取量。缺失 usage 时不估算 Token，覆盖率表示已经建立路由的推理请求中有多少报告了 usage。`usage.server_keys` 按调用方认证所用的本地 server key（指纹，与 `/api/api-keys` 的 ID 一致）拆分请求数和 Token；Playground 流量计入 `playground`。
+Token 统计仅使用上游报告的 usage。输入 Token 包含缓存读取和写入，缓存 Token 单独统计缓存读取量。缺失 usage 时不估算 Token，覆盖率表示已经建立路由的推理请求中有多少报告了 usage。`usage.window.server_keys`（Usage 页所选窗口）与 `usage.lifetime.server_keys` 分别按调用方认证所用的本地 server key（指纹，与 `/api/api-keys` 的 ID 一致）拆分请求数和 Token；Playground 流量计入 `playground`。
 
 | 数据                                            | 保存位置或保留规则                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------- |
