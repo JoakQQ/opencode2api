@@ -565,3 +565,7 @@ progress::-moz-progress-bar {
   border-top: 1px solid var(--border-1);
   background: var(--bg);
 }
+
+input#usage-hours {
+  padding: 8px 0;
+}
