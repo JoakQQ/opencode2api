@@ -1,10 +1,12 @@
 # opencode2api
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-HK.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
 
 Một gateway viết bằng Go cho **OpenCode Zen và Zen Go**. Nó cung cấp các endpoint Chat Completions, Responses và Anthropic Messages, chuyển đổi qua lại giữa các giao thức gốc của chúng, và quản lý upstream key cùng proxy.
 
 File thực thi đã bao gồm WebUI. Việc chạy dịch vụ không cần Node.js runtime hay cơ sở dữ liệu.
+
+> **Fork:** kho lưu trữ này là bản fork của [opencode2api](https://github.com/jasonxu114514/opencode2api), dự án gốc.
 
 ## Tính năng
 
@@ -25,28 +27,12 @@ Giao diện quản trị hỗ trợ **简体中文** (mặc định), **English*
 
 Xem [hướng dẫn bảng điều khiển quản trị (tiếng Trung)](docs/management.zh-CN.md) để biết các trang mới và tuỳ chọn cấu hình.
 
-## Nhà tài trợ
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">
-        <img src="assets/IPWO.png" width="163" alt="IPWO">
-      </a>
-    </td>
-    <td>
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">IPWO</a> cung cấp proxy dân cư với kết nối mạng linh hoạt cho phát triển AI và quy trình API, bao phủ hơn 195 quốc gia và khu vực, hỗ trợ giao thức HTTP(S) và SOCKS5.<br>
-      Phù hợp cho kiểm thử mạng xuyên khu vực, thu thập dữ liệu tuân thủ và phát triển tự động. Có gói proxy động, tĩnh và không giới hạn, hỗ trợ dùng thử miễn phí và chọn khu vực. Mã giảm giá: <b>0200</b>.
-    </td>
-  </tr>
-</table>
-
 ## Bắt đầu nhanh
 
-Tải file nhị phân từ [GitHub Releases](https://github.com/jasonxu114514/opencode2api/releases), hoặc build với **Go 1.24 trở lên**:
+Tải file nhị phân từ [GitHub Releases](https://github.com/JoakQQ/opencode2api/releases), hoặc build với **Go 1.24 trở lên**:
 
 ```bash
-git clone https://github.com/jasonxu114514/opencode2api.git
+git clone https://github.com/JoakQQ/opencode2api.git
 cd opencode2api
 cp config.example.json config.json
 go build -o opencode2api ./cmd/opencode2api
@@ -78,7 +64,7 @@ Thư mục cấu hình phải ghi được để thực hiện việc chuyển m
 
 ## Docker
 
-Image được phát hành là `ghcr.io/jasonxu114514/opencode2api`.
+`compose.yaml` vẫn trỏ tới image trên registry của dự án gốc; hãy build image bên dưới để chạy mã của bản fork này, hoặc phát hành image riêng và đặt `OPENCODE2API_VERSION`.
 
 ```bash
 cp config.example.json config.json
@@ -450,12 +436,15 @@ Sau khi thực thi, endpoint quản trị trả HTTP 200 với kết quả thự
 
 ### Ngôn ngữ giao diện
 
-WebUI tải bản dịch từ `webui/js/i18n.js`. Bản dịch có sẵn gồm **简体中文** (mặc định), **English**, **Tiếng Việt** và **Italiano**. Ngôn ngữ gốc **简体中文** nằm ngay trong `index.html` và `webui/js/`, và luôn được dùng làm dự phòng cho mọi chuỗi không có bản dịch — vì vậy việc thêm ngôn ngữ không làm thay đổi bản gốc.
+WebUI tải bản dịch từ `webui/js/i18n.js`. Bản dịch có sẵn gồm **简体中文** (mặc định), **繁體中文（HK）**, **English**, **Tiếng Việt** và **Italiano**. Ngôn ngữ gốc **简体中文** nằm ngay trong `index.html` và `webui/js/`, và luôn được dùng làm dự phòng cho mọi chuỗi không có bản dịch — vì vậy việc thêm ngôn ngữ không làm thay đổi bản gốc.
+
+Khối `zh-HK` đã đầy đủ: mọi khoá đều được dịch sang tiếng Trung phồn thể với thuật ngữ Hồng Kông (`設定`, `快取`, `帳號`, `登入`, `伺服器`, `預設`, `搜尋`), nên mục 繁體中文（HK） không bao giờ quay về bản giản thể; ngày giờ dùng locale `zh-HK`.
 
 - Bộ chọn ngôn ngữ nằm ở góc phải thanh công cụ (và trên thẻ đăng nhập).
 - Lựa chọn được lưu trong `localStorage` với khoá `opencode2api.ui.lang`.
 - Đổi ngôn ngữ sẽ dịch lại cả văn bản tĩnh (`data-i18n`, `data-i18n-attr`) lẫn văn bản do JavaScript tạo ra, mà không cần tải lại trang.
 - Định dạng ngày giờ cũng theo ngôn ngữ đang chọn.
+- Trình duyệt báo `zh-HK`, `zh-TW` hoặc `zh-MO` sẽ khởi động bằng tiếng Trung phồn thể; các biến thể `zh` khác khởi động bằng tiếng Trung giản thể.
 
 Thêm một ngôn ngữ mới chỉ cần thêm một khối vào `DICTIONARY` trong `webui/js/i18n.js`, rồi khai báo mã trong `SUPPORTED`, `LABELS`, `FLAGS` và `DATE_LOCALES`, và thêm vào chuỗi phát hiện `browserLocale`.
 
@@ -542,7 +531,7 @@ Node.js chỉ cần cho bước kiểm tra cú pháp JavaScript của WebUI:
 for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check < "$f"; done
 ```
 
-`.editorconfig`, `.gitattributes` và định dạng Go chuẩn hoá mã nguồn. CI chạy `go vet` và build với Go 1.24 và Go ở bản ổn định trên Linux/Windows, đồng thời kiểm tra định dạng Go, cú pháp WebUI và cú pháp shell của entrypoint. Gói phát hành gồm cả bốn README.
+`.editorconfig`, `.gitattributes` và định dạng Go chuẩn hoá mã nguồn. CI chạy `go vet` và build với Go 1.24 và Go ở bản ổn định trên Linux/Windows, đồng thời kiểm tra định dạng Go, cú pháp WebUI và cú pháp shell của entrypoint. Gói phát hành gồm cả năm README.
 
 ## Khắc phục sự cố
 
@@ -557,17 +546,17 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | Không kết nối được cổng của container       | Kiểm tra địa chỉ lắng nghe, cổng đã publish và cấu hình trong volume đang dùng.    |
 | Số liệu giám sát mất sau khi khởi động lại  | Giám sát chỉ nằm trong bộ nhớ; thu thập log stdout ra bên ngoài.                     |
 
-## Ghi nhận
-
-Cảm ơn cộng đồng [LINUX DO](https://linux.do) đã ủng hộ.
-
-### Cường độ suy luận thích ứng
+## Cường độ suy luận thích ứng
 
 Đặt `reasoning.effort` (hoặc ghi đè theo mô hình) là `auto` để dùng cường độ cao nhất đã được bộ dò mô hình miễn phí xác minh thành công. Các bậc cụ thể sẵn có giữ nguyên ý nghĩa và cường độ do client chỉ định được ưu tiên. Không có danh sách cho phép theo tên mô hình nào được duy trì.
 
 Sau khi một mức nền thành công, các mô hình có suy luận được dò theo thứ tự `max`, `xhigh`, `high`, `medium`, `low`, `minimal`. Chỉ khi có tham số suy luận bị từ chối tường minh mới chuyển xuống bậc thấp hơn. Lỗi tạm thời sẽ dừng tìm kiếm và không thể bị hiểu là trần năng lực thấp hơn. Nếu mọi bậc đều bị từ chối, không có ghi đè suy luận nào được chèn vào.
 
 Các quan sát được lưu theo URL upstream, mô hình và giao thức gốc, hiển thị ở trang tính khả dụng, và chỉ dùng tối đa hai giờ. Lần dò đang hoạt động chỉ áp dụng cho mô hình Zen/ẩn danh miễn phí; mô hình Go/trả phí, năng lực chưa biết và bậc chưa xác minh không nhận ghi đè tự động. Đặt `auto` không mở rộng phạm vi dò và không bảo đảm upstream tuân thủ mọi trường được chấp nhận. Việc dò có thể cần vài request nhỏ cho mỗi mô hình và dùng hạn mức của upstream.
+
+## Ghi nhận
+
+Kho lưu trữ này là bản fork của [opencode2api](https://github.com/jasonxu114514/opencode2api) do [jasonxu114514](https://github.com/jasonxu114514) phát triển. Thiết kế gateway, chuyển đổi giao thức, lối ra WARP, luân chuyển mô hình và phần lớn tài liệu này đến từ dự án gốc; mọi ghi công cho công việc gốc thuộc về các tác giả. Các thay đổi cục bộ trong bản fork này được duy trì riêng theo cùng giấy phép GPL-3.0-or-later.
 
 ## Giấy phép
 

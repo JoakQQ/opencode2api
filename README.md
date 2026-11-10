@@ -1,10 +1,12 @@
 # opencode2api
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-HK.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
 
 A Go gateway for **OpenCode Zen and Zen Go**. It exposes Chat Completions, Responses, and Anthropic Messages endpoints, translates between their native protocols, and manages upstream keys and proxies.
 
 The executable includes the WebUI. Running the service requires no Node.js runtime or database.
+
+> **Fork:** this repository is a fork of [opencode2api](https://github.com/jasonxu114514/opencode2api), the original project.
 
 ## Capabilities
 
@@ -23,28 +25,12 @@ The executable includes the WebUI. Running the service requires no Node.js runti
 
 See the [management console guide (Chinese)](docs/management.zh-CN.md) for the new pages and configuration.
 
-## Sponsors
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">
-        <img src="assets/IPWO.png" width="163" alt="IPWO">
-      </a>
-    </td>
-    <td>
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">IPWO</a> residential proxies provide flexible network connectivity for AI development and API workflows, covering 195+ countries and regions with HTTP(S) and SOCKS5 support.<br>
-      Suitable for cross-region network testing, compliant data collection, and automated development. Dynamic, static, and unlimited proxy plans are available, with free testing and region selection. Discount code: <b>0200</b>.
-    </td>
-  </tr>
-</table>
-
 ## Quick start
 
-Download a binary from [GitHub Releases](https://github.com/jasonxu114514/opencode2api/releases), or build with **Go 1.24 or newer**:
+Download a binary from [GitHub Releases](https://github.com/JoakQQ/opencode2api/releases), or build with **Go 1.24 or newer**:
 
 ```bash
-git clone https://github.com/jasonxu114514/opencode2api.git
+git clone https://github.com/JoakQQ/opencode2api.git
 cd opencode2api
 cp config.example.json config.json
 go build -o opencode2api ./cmd/opencode2api
@@ -76,7 +62,7 @@ The configuration directory must be writable for password migration, configurati
 
 ## Docker
 
-The published image is `ghcr.io/jasonxu114514/opencode2api`.
+`compose.yaml` still points at the upstream registry image; build the image below to run this fork's code, or publish your own and set `OPENCODE2API_VERSION`.
 
 ```bash
 cp config.example.json config.json
@@ -461,12 +447,15 @@ After execution, the management endpoint returns HTTP 200 with the actual result
 
 ### Interface language
 
-The WebUI loads its translations from `webui/js/i18n.js`. It ships with **简体中文** (default), **English**, **Tiếng Việt**, and **Italiano**. The original Simplified Chinese copy lives in `index.html` and `webui/js/` and stays the fallback for every string without a translation, so adding a language never rewrites the original.
+The WebUI loads its translations from `webui/js/i18n.js`. It ships with **简体中文** (default), **繁體中文（HK）**, **English**, **Tiếng Việt**, and **Italiano**. The original Simplified Chinese copy lives in `index.html` and `webui/js/` and stays the fallback for every string without a translation, so adding a language never rewrites the original.
+
+The `zh-HK` block is complete: every key is translated into Traditional Chinese with Hong Kong terminology (`設定`, `快取`, `帳號`, `登入`, `伺服器`, `預設`, `搜尋`), so the 繁體中文（HK） entry never falls back to the Simplified originals. Dates use the `zh-HK` locale.
 
 - The selector sits in the topbar, and on the login card.
 - The choice is stored in `localStorage` under `opencode2api.ui.lang`.
 - Switching re-renders both static text (`data-i18n`, `data-i18n-attr`) and JavaScript-generated text without reloading the page.
 - Dates and times follow the selected locale as well.
+- A browser reporting `zh-HK`, `zh-TW`, or `zh-MO` starts in 繁體中文; other `zh` variants start in 简体中文.
 
 To add a language, add one block to `DICTIONARY` in `webui/js/i18n.js`, then register its code in `SUPPORTED`, `LABELS`, `FLAGS`, and `DATE_LOCALES`, and add it to the `browserLocale` detection chain.
 
@@ -553,7 +542,7 @@ Node.js is only needed for the WebUI JavaScript syntax check:
 for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check < "$f"; done
 ```
 
-`.editorconfig`, `.gitattributes`, and Go formatting standardize the source. CI runs `go vet` and builds with Go 1.24 and stable Go on Linux/Windows, plus Go formatting, WebUI syntax, and entrypoint shell syntax checks. Release archives include all four READMEs.
+`.editorconfig`, `.gitattributes`, and Go formatting standardize the source. CI runs `go vet` and builds with Go 1.24 and stable Go on Linux/Windows, plus Go formatting, WebUI syntax, and entrypoint shell syntax checks. Release archives include all five READMEs.
 
 ## Troubleshooting
 
@@ -568,17 +557,17 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | Container ports are unreachable      | Check listener addresses, published ports, and the active volume configuration.           |
 | Monitoring disappeared after restart | Monitoring is stored only in memory; collect stdout logs externally.                      |
 
-## Acknowledgements
-
-Thanks to the [LINUX DO](https://linux.do) community for its support.
-
-### Adaptive reasoning effort
+## Adaptive reasoning effort
 
 Set `reasoning.effort` (or a per-model override) to `auto` to use the highest effort successfully validated by the free-model probe. Existing concrete levels retain their meaning and client-specified effort takes precedence. No model-name allowlist is maintained.
 
 After a baseline succeeds, reasoning-capable models are probed in `max`, `xhigh`, `high`, `medium`, `low`, `minimal` order. Only an explicit reasoning-parameter rejection advances to a lower level. Transient failures stop the search and cannot be interpreted as a lower capability ceiling. If every level is rejected, no reasoning override is injected.
 
 Observations are persisted by upstream URL, model and native protocol, displayed in the availability page, and used for at most two hours. Active probes cover only free Zen/anonymous models; Go/paid models, unknown capabilities and unverified levels receive no automatic override. Setting `auto` does not expand the probe scope or guarantee that upstreams enforce every accepted field. Probing may require several small requests per model and uses upstream allowance.
+
+## Credits
+
+This repository is a fork of [opencode2api](https://github.com/jasonxu114514/opencode2api) by [jasonxu114514](https://github.com/jasonxu114514). The gateway design, protocol translation, WARP egress, model rotation, and most of this documentation originate there; all credit for the original work belongs to its authors. Local changes in this fork are maintained separately under the same GPL-3.0-or-later license.
 
 ## License
 

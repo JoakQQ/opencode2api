@@ -1,10 +1,12 @@
 # opencode2api
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-HK.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
 
 使用 Go 编写的 **OpenCode Zen / Zen Go API 网关**。对外提供 Chat Completions、Responses 和 Anthropic Messages 接口，按上游原生协议转换请求，并统一管理上游 Key 与代理。
 
 WebUI 内嵌在可执行文件中，运行服务无需 Node.js 或数据库。
+
+> **Fork 说明：** 本仓库是 [opencode2api](https://github.com/jasonxu114514/opencode2api) 的分支，原项目地址见链接。
 
 ## 功能
 
@@ -23,28 +25,12 @@ WebUI 内嵌在可执行文件中，运行服务无需 Node.js 或数据库。
 
 新增页面及调用示例见[管理控制台说明](docs/management.zh-CN.md)。
 
-## 赞助商
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">
-        <img src="assets/IPWO.png" width="163" alt="IPWO">
-      </a>
-    </td>
-    <td>
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">IPWO</a> 住宅代理为 AI 开发与 API 工作流提供灵活的网络连接支持，覆盖 195+ 个国家和地区，支持 HTTP(S) 与 SOCKS5 协议。<br>
-      适用于跨地区网络测试、合规数据采集及自动化开发场景。提供动态代理、静态代理及不限量代理，支持免费测试和地区选择。优惠折扣码：<b>0200</b>。
-    </td>
-  </tr>
-</table>
-
 ## 快速开始
 
-从 [GitHub Releases](https://github.com/jasonxu114514/opencode2api/releases) 下载可执行文件，或使用 **Go 1.24 及以上版本**编译：
+从 [GitHub Releases](https://github.com/JoakQQ/opencode2api/releases) 下载可执行文件，或使用 **Go 1.24 及以上版本**编译：
 
 ```bash
-git clone https://github.com/jasonxu114514/opencode2api.git
+git clone https://github.com/JoakQQ/opencode2api.git
 cd opencode2api
 cp config.example.json config.json
 go build -o opencode2api ./cmd/opencode2api
@@ -76,7 +62,7 @@ Windows 下使用 `Copy-Item config.example.json config.json` 复制配置，执
 
 ## Docker 部署
 
-已发布镜像：`ghcr.io/jasonxu114514/opencode2api`。
+`compose.yaml` 中的镜像仍指向原项目仓库；要运行本分支代码，请按下文在本地构建镜像，或发布自己的镜像并通过 `OPENCODE2API_VERSION` 指定。
 
 ```bash
 cp config.example.json config.json
@@ -455,12 +441,15 @@ Playground 需要已登录的 Session 和 `X-CSRF-Token`，每个客户端 IP �
 
 ### 界面语言
 
-WebUI 从 `webui/js/i18n.js` 加载翻译，内置 **简体中文**（默认）、**English**、**Tiếng Việt** 和 **Italiano**。原始简体中文文案保留在 `index.html` 和 `webui/js/` 中，并始终作为缺少翻译时的回退，因此新增语言不会覆盖原文。
+WebUI 从 `webui/js/i18n.js` 加载翻译，内置 **简体中文**（默认）、**繁體中文（HK）**、**English**、**Tiếng Việt** 和 **Italiano**。原始简体中文文案保留在 `index.html` 和 `webui/js/` 中，并始终作为缺少翻译时的回退，因此新增语言不会覆盖原文。
+
+`zh-HK` 语言块是完整的：所有键都译为繁体中文并采用香港用词（`設定`、`快取`、`帳號`、`登入`、`伺服器`、`預設`、`搜尋`），因此繁體中文（HK）不会回退到简体原文；日期时间使用 `zh-HK` 区域设置。
 
 - 语言选择器位于顶部工具栏右侧，登录卡片上也有一个。
 - 选择结果保存在 `localStorage`，键名为 `opencode2api.ui.lang`。
 - 切换语言会同时重绘静态文案（`data-i18n`、`data-i18n-attr`）和 JavaScript 生成的文案，无需刷新页面。
 - 日期时间格式跟随所选语言。
+- 浏览器语言为 `zh-HK`、`zh-TW` 或 `zh-MO` 时默认进入繁體中文，其他 `zh` 变体默认进入简体中文。
 
 新增语言时，在 `webui/js/i18n.js` 的 `DICTIONARY` 中增加一个语言块，并在 `SUPPORTED`、`LABELS`、`FLAGS` 和 `DATE_LOCALES` 中登记其代码，同时加入 `browserLocale` 检测链。
 
@@ -547,7 +536,7 @@ Node.js 仅用于 WebUI 的 JavaScript 语法检查：
 for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check < "$f"; done
 ```
 
-项目通过 `.editorconfig`、`.gitattributes` 和 Go 格式化统一格式。CI 覆盖 Linux / Windows 上的 Go 1.24 与稳定版 Go 的 `go vet` 和构建，以及 Go 格式、WebUI 语法和容器入口脚本语法检查。发布压缩包包含四份 README。
+项目通过 `.editorconfig`、`.gitattributes` 和 Go 格式化统一格式。CI 覆盖 Linux / Windows 上的 Go 1.24 与稳定版 Go 的 `go vet` 和构建，以及 Go 格式、WebUI 语法和容器入口脚本语法检查。发布压缩包包含五份 README。
 
 ## 常见问题
 
@@ -562,17 +551,17 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | 无法通过容器端口访问          | 检查监听地址、端口映射和状态卷中的实际配置。       |
 | 重启后监控消失                | 监控仅保存在内存，需要外部收集 stdout 日志。       |
 
-## 致谢
-
-感谢 [LINUX DO](https://linux.do) 社区的支持。
-
-### 自适应思考强度
+## 自适应思考强度
 
 将 `reasoning.effort` 或按模型覆盖值设置为 `auto`，即可使用免费模型探测实际验证过的最高可用档。已有具体档位语义不变，客户端显式指定的强度始终优先，不维护模型名称白名单。
 
 基础请求成功后，对能力目录标记支持 reasoning 的模型依次验证 `max`、`xhigh`、`high`、`medium`、`low`、`minimal`。只有明确的思考参数不支持错误才尝试下一档；429、超时等临时失败会停止搜索，不能据此判断模型档位上限。全部档位均被拒绝时，不注入思考覆盖。
 
 结果按上游 URL、模型与原生协议持久化，在可用性页展示，最多使用两小时内的验证结果。主动探测仍只覆盖免费 Zen/匿名模型；Go/付费模型、能力未知或尚未验证的模型不猜测档位。开启 `auto` 不扩大探测范围，也不能证明上游一定执行了所有接受的字段；每个模型可能增加数次简短请求并消耗上游额度。
+
+## 致谢
+
+本仓库是 [jasonxu114514](https://github.com/jasonxu114514) 的 [opencode2api](https://github.com/jasonxu114514/opencode2api) 的分支。网关设计、协议转换、WARP 出口、模型轮转以及本文档的大部分内容均来自原项目，原创成果归原作者所有；本分支的本地修改在同一 GPL-3.0-or-later 许可下单独维护。
 
 ## 许可证
 
