@@ -29,7 +29,8 @@ type logSubscriber struct {
 }
 
 // LogBroker keeps the most recent log events in a ring buffer for the WebUI and
-// fans every new event out to live subscribers.
+// fans every new event out to live subscribers. With a Store, every event is
+// also written to SQLite and the buffer is restored from it at startup.
 type LogBroker struct {
 	mu          sync.RWMutex
 	buffer      []LogEvent
@@ -38,14 +39,34 @@ type LogBroker struct {
 	next        uint64
 	subscribers map[uint64]*logSubscriber
 	nextSub     uint64
+	store       *Store
 }
 
 // LogHub creates a LogBroker that keeps the last capacity events, at least 100.
-func LogHub(capacity int) *LogBroker {
+// With a Store it also restores the newest capacity persisted events and writes
+// each new event to it.
+func LogHub(capacity int, store *Store) (*LogBroker, error) {
 	if capacity < 100 {
 		capacity = 100
 	}
-	return &LogBroker{buffer: make([]LogEvent, capacity), subscribers: make(map[uint64]*logSubscriber)}
+	hub := &LogBroker{buffer: make([]LogEvent, capacity), subscribers: make(map[uint64]*logSubscriber), store: store}
+	if store == nil {
+		return hub, nil
+	}
+	events, err := store.loadLogs(capacity)
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range events {
+		if hub.count < len(hub.buffer) {
+			hub.buffer[(hub.start+hub.count)%len(hub.buffer)] = event
+			hub.count++
+		}
+		if event.Sequence > hub.next {
+			hub.next = event.Sequence
+		}
+	}
+	return hub, nil
 }
 
 // Resize changes the buffer capacity (at least 100), keeping the newest events
@@ -70,7 +91,9 @@ func (h *LogBroker) Resize(capacity int) {
 }
 
 // Publish assigns event the next sequence number, stores it, overwriting the
-// oldest event when the buffer is full, and offers it to every subscriber.
+// oldest event when the buffer is full, and offers it to every subscriber. With
+// a Store the event is also queued for SQLite; a full write queue never blocks
+// logging.
 func (h *LogBroker) Publish(event LogEvent) {
 	h.mu.Lock()
 	h.next++
@@ -91,6 +114,9 @@ func (h *LogBroker) Publish(event LogEvent) {
 			// event leaves a hole in the sequence numbers, which the subscriber
 			// can report as a gap.
 		}
+	}
+	if h.store != nil {
+		h.store.persistLog(event)
 	}
 	h.mu.Unlock()
 }

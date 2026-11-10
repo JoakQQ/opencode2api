@@ -23,7 +23,7 @@ WebUI 內嵌在可執行檔案中，執行服務無需 Node.js 或資料庫。
 - API Key 生成、自定義、命名、啟停和刪除，變更立即生效。
 - `sota` / `sweet` 分組別名，支援模型排序、故障切換、流式輸出保護和狀態恢復。
 
-新增頁面及呼叫範例見[管理控制台說明](docs/management.zh-CN.md)。
+新增頁面及呼叫範例見[管理控制台說明（英文）](docs/management.md)。
 
 ## 快速開始
 
@@ -78,7 +78,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-容器內的服務進程使用普通用戶執行。Compose 啟用唯讀根檔案系統，並提供可寫狀態卷和臨時 `/tmp` 檔案系統。
+容器內的服務進程使用普通用戶執行。Compose 啟用唯讀根檔案系統，並提供可寫狀態卷和臨時 `/tmp` 檔案系統。遙測資料庫位於獨立掛載到 `/storage` 的 `opencode2api-storage` 卷（預設 `storage.path` 目錄）；備份時請連同狀態卷一併進行。
 
 WARP 只需要出站 UDP（Cloudflare 端點連接埠 `2408`），因此映像的普通用戶、無 `NET_ADMIN` 設定無需改動；不要為此改用 host 網絡或添加 `--cap-add`。如果容器網絡禁止 UDP，啟用 WARP 會在啟動時失敗。
 
@@ -99,11 +99,13 @@ WARP 只需要出站 UDP（Cloudflare 端點連接埠 `2408`），因此映像�
 ```bash
 docker build -t opencode2api:local .
 docker volume create opencode2api-state
+docker volume create opencode2api-storage
 docker run -d --name opencode2api \
   -p 8080:8080 -p 8081:8081 \
   -e CONFIG_SEED_PATH=/run/config/opencode2api.json \
   -v "$(pwd)/config.json:/run/config/opencode2api.json:ro" \
   -v opencode2api-state:/var/lib/opencode2api \
+  -v opencode2api-storage:/storage \
   opencode2api:local
 ```
 
@@ -392,6 +394,8 @@ pool+http://127.0.0.1:7891
 | `logging.level`               | `info`；可選 `debug`、`info`、`warn`、`error`。 |
 | `logging.ring_size`           | `2000`；範圍為 100–50,000。                     |
 | `logging.dump_request_bodies` | `false`；配合 `debug` 日誌級別輸出上游請求體。  |
+| `storage.enabled`             | `true`；設為 `false` 時指標與日誌僅保存在記憶體。  |
+| `storage.path`                | `/storage/opencode-core.db`；相對路徑按設定檔案所在目錄解析。 |
 | `webui.enabled`               | 省略時為 `false`；範例設定設定為 `true`。       |
 | `webui.listen`                | `0.0.0.0:8081`。                                |
 | `webui.username`              | 啟用 WebUI 時必填；範例為 `admin`。             |
@@ -457,7 +461,7 @@ WebUI 從 `webui/js/i18n.js` 載入翻譯，內建 **簡體中文**（預設）�
 
 服務先驗證候選設定並創建新的 Gateway，然後儲存設定並切換實例。驗證或儲存失敗時，目前 Gateway 繼續處理請求；已經開始的請求繼續使用原有實例。
 
-Key、代理、上游位址、重試、模型、日誌和路由偏好立即對新請求生效。`listen`、`webui.listen`、`webui.enabled` 的修改需要重啟進程。儲存後的 JSON 會規範化，不保留原有註釋。
+Key、代理、上游位址、重試、模型、日誌和路由偏好立即對新請求生效。`listen`、`webui.listen`、`webui.enabled`、`storage.enabled`、`storage.path` 的修改需要重啟進程。儲存後的 JSON 會規範化，不保留原有註釋。
 
 ## 監控與持久化
 
@@ -465,19 +469,19 @@ Key、代理、上游位址、重試、模型、日誌和路由偏好立即對�
 
 上游**嘗試記錄**統計的是收到回應標頭為止的 HTTP 互動，其成功狀態和耗時與完整 JSON 回應或流的最終完成情況分開計算。
 
-Token 統計僅使用上游報告的 usage。輸入 Token 包含快取讀取和寫入，快取 Token 單獨統計快取讀取量。缺失 usage 時不估算 Token，覆蓋率表示已經建立路由的推理請求中有多少報告了 usage。`usage.server_keys` 按呼叫方認證所用的本地 server key（指紋，與 `/api/api-keys` 的 ID 一致）拆分請求數和 Token；Playground 流量計入 `playground`。
+Token 統計僅使用上游報告的 usage。輸入 Token 包含快取讀取和寫入，快取 Token 單獨統計快取讀取量。缺失 usage 時不估算 Token，覆蓋率表示已經建立路由的推理請求中有多少報告了 usage。`usage.window.server_keys`（Usage 頁所選視窗）與 `usage.lifetime.server_keys` 分別按呼叫方認證所用的本地 server key（指紋，與 `/api/api-keys` 的 ID 一致）拆分請求數和 Token；Playground 流量計入 `playground`。
 
 | 數據                                            | 儲存位置或保留規則                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| Session、指標、Token 累計、最近 Playground 結果 | 進程記憶體；重啟清空。                                                      |
-| 請求與嘗試明細                                  | 最近一小時，最多 10,000 個請求和 20,000 次嘗試；API 分別最多返回 500 條。 |
-| 即時日誌環形緩衝區                                | 進程記憶體，大小由 `logging.ring_size` 指定。                               |
-| 結構化日誌                                      | stdout JSON；需要長期保留時由外部系統收集。                               |
+| Session、最近 Playground 結果                   | 進程記憶體；重啟清空。                                                      |
+| 指標、Token 累計、請求與嘗試明細                | `storage.path`（預設 `/storage/opencode-core.db`）中的 SQLite；超過 48 小時的行會被清理。 |
+| 即時日誌環形緩衝區                              | 啟動時從 `log_events` 恢復，返回最近 `logging.ring_size` 條。             |
+| 結構化日誌                                      | stdout JSON，同時寫入 `log_events` 並在 48 小時後清理；更長的歷史需外部收集。 |
 | 目前設定與上一版本                              | `config.json`、`config.json.bak`。                                        |
 | 模型目錄快取                                    | `config.json.models.catalog.json`。                                       |
 | 成本與棄用資訊快取                              | `config.json.models.dev.json`。                                           |
 
-快取檔案名基於實際設定路徑生成。lifetime 僅表示目前進程執行期間的累計，各實例之間不共享 Session 或監控狀態。
+快取檔名基於實際設定路徑生成。`storage.enabled`（預設 `true`）把指標、上游嘗試與日誌事件保存到 `storage.path`（預設 `/storage/opencode-core.db`）的 SQLite 檔案，重啟後控制台仍有歷史；每小時清理超過 48 小時的行，lifetime 累計則保留。寫入批次進行且不阻塞請求：檔案無法開啟時網關照常服務，控制台退回記憶體模式，並在事件日誌中記錄 `storage_unavailable`。進程執行時長與管理登入 Session 仍隨進程重啟。指向同一資料庫檔案的實例共享遙測歷史，但不共享 Session。
 
 ### 健康檢查
 
@@ -549,7 +553,7 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | HTTP 200 但生成失敗           | 查看 SSE 錯誤事件和請求結果，不能只看 HTTP 狀態。  |
 | Docker 中宿主機設定修改不生效 | 目前設定在狀態卷中；重新導入，或透過 WebUI 修改。  |
 | 無法透過容器連接埠存取          | 檢查監聽位址、連接埠映射和狀態卷中的實際設定。       |
-| 重啟後監控消失                | 監控僅儲存在記憶體，需要外部收集 stdout 日誌。       |
+| 重啟後監控消失                | 指標與日誌保存在 `storage.path` 中，保留 48 小時；只有 Session、執行時長和超過保留窗口的行會消失。 |
 
 ## 自適應思考強度
 

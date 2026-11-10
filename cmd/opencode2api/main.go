@@ -46,11 +46,41 @@ func main() {
 	defer cancel()
 	level := new(slog.LevelVar)
 	telemetry.SetLogLevel(level, cfg.Logging.Level)
-	hub := telemetry.LogHub(cfg.Logging.RingSize)
+
+	// The telemetry database keeps metrics and log events across restarts. An
+	// unusable path degrades to the in-memory behavior instead of stopping the
+	// gateway, so the console still works and the reason is in the event log.
+	var store *telemetry.Store
+	if cfg.Storage.Enabled {
+		opened, err := telemetry.OpenStore(cfg.Storage.Path)
+		if err != nil {
+			store = nil
+			slog.Warn("telemetry database unavailable; keeping metrics in memory",
+				"component", "telemetry", "event", "storage_unavailable", "path", cfg.Storage.Path, "error", err)
+		} else {
+			store = opened
+			defer func() { _ = store.Close() }()
+		}
+	}
+	hub, err := telemetry.LogHub(cfg.Logging.RingSize, store)
+	if err != nil {
+		slog.Warn("log history unavailable; starting with an empty buffer",
+			"component", "telemetry", "event", "storage_unavailable", "error", err)
+		hub, _ = telemetry.LogHub(cfg.Logging.RingSize, nil)
+	}
 	redactor := config.SecretRedactor()
 	redactor.Replace(cfg)
 	logger := telemetry.StructuredLogger(level, hub, redactor)
-	monitor := telemetry.Monitor()
+	if store != nil {
+		logger.Info("telemetry database ready", "component", "telemetry", "event", "storage_ready",
+			"path", store.Path(), "retention_hours", telemetry.RetentionHours)
+	}
+	monitor, err := telemetry.Monitor(store)
+	if err != nil {
+		logger.Warn("metrics history unavailable; starting from zero", "component", "telemetry", "event", "storage_unavailable", "error", err)
+		monitor, _ = telemetry.Monitor(nil)
+	}
+	defer monitor.Close()
 	manager, err := gateway.RuntimeManager(ctx, *configPath, cfg, logger, monitor, hub, redactor, level)
 	if err != nil {
 		logger.Error("failed to initialize runtime", "component", "runtime", "event", "runtime_initialization_failed", "error", err)

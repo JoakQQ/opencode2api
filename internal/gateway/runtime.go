@@ -74,11 +74,14 @@ type RuntimeController struct {
 }
 
 // EffectiveListeners are the listener settings the running process actually
-// bound at startup. They only change after a restart.
+// bound at startup. They only change after a restart. Storage is recorded too:
+// the database is opened once, so a changed path waits for a restart.
 type EffectiveListeners struct {
-	API          string
-	WebUI        string
-	WebUIEnabled bool
+	API            string
+	WebUI          string
+	WebUIEnabled   bool
+	StorageEnabled bool
+	StoragePath    string
 }
 
 // RuntimeManager builds the RuntimeController for cfg and starts its first
@@ -90,7 +93,10 @@ type EffectiveListeners struct {
 func RuntimeManager(root context.Context, configPath string, cfg config.Config, logger *slog.Logger, monitor *telemetry.Metrics, hub *telemetry.LogBroker, redactor *config.Redactor, level *slog.LevelVar) (*RuntimeController, error) {
 	manager := &RuntimeController{
 		configPath: configPath, root: root, logger: logger, monitor: monitor, hub: hub, redactor: redactor, level: level,
-		effective: EffectiveListeners{API: cfg.Listen, WebUI: cfg.WebUI.Listen, WebUIEnabled: cfg.WebUI.Enabled},
+		effective: EffectiveListeners{
+			API: cfg.Listen, WebUI: cfg.WebUI.Listen, WebUIEnabled: cfg.WebUI.Enabled,
+			StorageEnabled: cfg.Storage.Enabled, StoragePath: cfg.Storage.Path,
+		},
 	}
 	manager.metadata = modelcatalog.PricingStore(configPath, logger)
 	// OpenCode metadata refreshes ride the active runtime's healthy proxy
@@ -304,11 +310,11 @@ func (m *RuntimeController) Config() config.Config {
 }
 
 // RestartStatus returns the listeners the process bound at startup and the
-// config fields (listen, webui.listen, webui.enabled) whose current value
-// differs from them, i.e. the changes waiting for a restart.
+// config fields (listen, webui.listen, webui.enabled, storage.*) whose current
+// value differs from them, i.e. the changes waiting for a restart.
 func (m *RuntimeController) RestartStatus() (EffectiveListeners, []string) {
 	cfg := m.Config()
-	fields := make([]string, 0, 3)
+	fields := make([]string, 0, 5)
 	if cfg.Listen != m.effective.API {
 		fields = append(fields, "listen")
 	}
@@ -317,6 +323,12 @@ func (m *RuntimeController) RestartStatus() (EffectiveListeners, []string) {
 	}
 	if cfg.WebUI.Enabled != m.effective.WebUIEnabled {
 		fields = append(fields, "webui.enabled")
+	}
+	if cfg.Storage.Enabled != m.effective.StorageEnabled {
+		fields = append(fields, "storage.enabled")
+	}
+	if cfg.Storage.Path != m.effective.StoragePath {
+		fields = append(fields, "storage.path")
 	}
 	return m.effective, fields
 }

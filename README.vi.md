@@ -25,7 +25,7 @@ File thực thi đã bao gồm WebUI. Việc chạy dịch vụ không cần Nod
 
 Giao diện quản trị hỗ trợ **简体中文** (mặc định), **English**, **Tiếng Việt** và **Italiano**; lựa chọn được lưu trong trình duyệt và không làm thay đổi bản gốc.
 
-Xem [hướng dẫn bảng điều khiển quản trị (tiếng Trung)](docs/management.zh-CN.md) để biết các trang mới và tuỳ chọn cấu hình.
+Xem [hướng dẫn bảng điều khiển quản trị](docs/management.md) để biết các trang mới và tuỳ chọn cấu hình.
 
 ## Bắt đầu nhanh
 
@@ -80,7 +80,7 @@ docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
 docker compose restart
 ```
 
-Container chạy dịch vụ bằng user không có đặc quyền. Compose dùng hệ thống file gốc chỉ đọc, volume trạng thái ghi được và hệ thống file tạm `/tmp`.
+Container chạy dịch vụ bằng user không có đặc quyền. Compose dùng hệ thống file gốc chỉ đọc, volume trạng thái ghi được và hệ thống file tạm `/tmp`. Cơ sở dữ liệu telemetry nằm trong volume riêng `opencode2api-storage` gắn tại `/storage` — thư mục mặc định của `storage.path` — nên hãy sao lưu cùng volume trạng thái.
 
 WARP chỉ cần UDP ra ngoài (endpoint Cloudflare, cổng `2408`), nên thiết lập user thường, không `NET_ADMIN` của image vẫn dùng được; không cần chuyển sang host networking hay thêm `--cap-add`. Nếu mạng container chặn UDP, việc bật WARP sẽ thất bại lúc khởi động.
 
@@ -101,11 +101,13 @@ Build image cục bộ:
 ```bash
 docker build -t opencode2api:local .
 docker volume create opencode2api-state
+docker volume create opencode2api-storage
 docker run -d --name opencode2api \
   -p 8080:8080 -p 8081:8081 \
   -e CONFIG_SEED_PATH=/run/config/opencode2api.json \
   -v "$(pwd)/config.json:/run/config/opencode2api.json:ro" \
   -v opencode2api-state:/var/lib/opencode2api \
+  -v opencode2api-storage:/storage \
   opencode2api:local
 ```
 
@@ -387,6 +389,8 @@ Timeout header cho mỗi lần thử bị chặn trên bởi timeout của reque
 | `logging.level`               | `info`; nhận `debug`, `info`, `warn`, `error`.          |
 | `logging.ring_size`           | `2000`; khoảng 100–50.000.                              |
 | `logging.dump_request_bodies` | `false`. Cần log mức `debug` để xuất body đi ra.        |
+| `storage.enabled`             | `true`; đặt `false` để chỉ giữ số đo và log trong bộ nhớ. |
+| `storage.path`                | `/storage/opencode-core.db`; đường dẫn tương đối được tính theo thư mục cấu hình. |
 | `webui.enabled`               | `false` nếu bỏ qua; file mẫu đặt là `true`.            |
 | `webui.listen`                | `0.0.0.0:8081`.                                          |
 | `webui.username`              | Bắt buộc khi bật WebUI; file mẫu dùng `admin`.          |
@@ -452,7 +456,7 @@ Thêm một ngôn ngữ mới chỉ cần thêm một khối vào `DICTIONARY` t
 
 Máy chủ kiểm tra một cấu hình ứng viên và dựng gateway thay thế trước khi lưu và chuyển đổi. Kiểm tra hoặc lưu thất bại sẽ giữ nguyên gateway đang hoạt động. Các request đang chạy vẫn tiếp tục trên gateway gốc của chúng.
 
-Key, proxy, URL upstream, thiết lập retry, thiết lập mô hình, nhật ký và tuỳ chọn định tuyến có hiệu lực ngay với request mới. Thay đổi `listen`, `webui.listen` hoặc `webui.enabled` cần khởi động lại tiến trình. JSON đã lưu được chuẩn hoá; chú thích không được giữ lại.
+Key, proxy, URL upstream, thiết lập retry, thiết lập mô hình, nhật ký và tuỳ chọn định tuyến có hiệu lực ngay với request mới. Thay đổi `listen`, `webui.listen`, `webui.enabled`, `storage.enabled` hoặc `storage.path` cần khởi động lại tiến trình. JSON đã lưu được chuẩn hoá; chú thích không được giữ lại.
 
 ## Giám sát và lưu trữ
 
@@ -460,19 +464,19 @@ Kết quả request mô tả lần suy luận đã hoàn tất. Một phản h�
 
 Bản ghi **lần thử** upstream đo trao đổi HTTP tính tới lúc nhận được header phản hồi. Thành công và độ trễ của nó tách biệt với việc hoàn tất toàn bộ body JSON hoặc luồng.
 
-Thống kê token chỉ dùng usage được báo. Token input bao gồm đọc và ghi cache; token cache riêng đếm các lần đọc cache. Usage thiếu không được ước tính, và độ phủ cho biết bao nhiêu request suy luận đã định tuyến có báo usage. `usage.server_keys` tách request và token theo server key cục bộ mà caller đã xác thực (vân tay của nó, như hiển thị ở `/api/api-keys`); lưu lượng Playground được tính dưới mục `playground`.
+Thống kê token chỉ dùng usage được báo. Token input bao gồm đọc và ghi cache; token cache riêng đếm các lần đọc cache. Usage thiếu không được ước tính, và độ phủ cho biết bao nhiêu request suy luận đã định tuyến có báo usage. `usage.window.server_keys` (cửa sổ đang chọn ở tab Usage) và `usage.lifetime.server_keys` tách request và token theo server key cục bộ mà caller đã xác thực (vân tay của nó, như hiển thị ở `/api/api-keys`); lưu lượng Playground được tính dưới mục `playground`.
 
 | Dữ liệu                                                  | Lưu trữ / thời gian giữ                                        |
 | -------------------------------------------------------- | -------------------------------------------------------------- |
-| Session, số đo, tổng token, kết quả Playground gần nhất   | Bộ nhớ tiến trình; bị xoá khi khởi động lại.                   |
-| Chi tiết request và lần thử                                | Một giờ gần nhất, tối đa 10.000 request và 20.000 lần thử; API trả tối đa 500 mục mỗi loại. |
-| Ring log trực tiếp                                         | Bộ nhớ tiến trình; kích thước do `logging.ring_size` quy định. |
-| Log có cấu trúc                                            | JSON trên stdout; thu thập bên ngoài để lưu lâu dài.          |
+| Session, kết quả Playground gần nhất                      | Bộ nhớ tiến trình; bị xoá khi khởi động lại.                   |
+| Số đo, tổng token, chi tiết request và lần thử              | SQLite tại `storage.path` (mặc định `/storage/opencode-core.db`); các hàng cũ hơn 48 giờ bị xoá. |
+| Ring log trực tiếp                                         | Khôi phục từ `log_events` khi khởi động; trả về `logging.ring_size` sự kiện mới nhất. |
+| Log có cấu trúc                                            | JSON trên stdout và trong `log_events`, xoá sau 48 giờ; thu thập stdout để lưu lâu hơn. |
 | Cấu hình và phiên bản trước                                 | `config.json` và `config.json.bak`.                             |
 | Cache danh mục mô hình                                      | `config.json.models.catalog.json`.                             |
 | Cache giá/ngừng cấp                                         | `config.json.models.dev.json`.                                 |
 
-Tên file cache dựa trên đường dẫn cấu hình thực tế. Các bộ đếm tuổi thọ đều tính theo tuổi thọ tiến trình hiện tại. Các instance không chia sẻ session hay trạng thái giám sát.
+Tên file cache dựa trên đường dẫn cấu hình thực tế. Với `storage.enabled` (mặc định `true`), số đo, lần thử upstream và sự kiện log được lưu trong file SQLite ở `storage.path` (mặc định `/storage/opencode-core.db`), nên bảng điều khiển giữ được lịch sử sau khi khởi động lại; mỗi giờ sẽ xoá các hàng cũ hơn 48 giờ, còn các bộ đếm tuổi thọ vẫn giữ. Ghi được gom lô và không bao giờ chặn request: nếu không mở được file, gateway vẫn phục vụ và bảng điều khiển quay về bộ nhớ, sự kiện `storage_unavailable` được ghi vào log. Thời gian chạy tiến trình và session quản trị vẫn khởi động lại cùng tiến trình. Các instance dùng chung file sẽ chia sẻ lịch sử telemetry, nhưng không chia sẻ session.
 
 ### Health check
 
@@ -544,7 +548,7 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | HTTP 200 nhưng sinh nội dung thất bại        | Xem sự kiện lỗi SSE và kết quả request, không chỉ mã trạng thái HTTP.                |
 | Sửa trên host không có tác dụng trong Docker | File đang hoạt động nằm trong volume trạng thái; import lại hoặc dùng WebUI.        |
 | Không kết nối được cổng của container       | Kiểm tra địa chỉ lắng nghe, cổng đã publish và cấu hình trong volume đang dùng.    |
-| Số liệu giám sát mất sau khi khởi động lại  | Giám sát chỉ nằm trong bộ nhớ; thu thập log stdout ra bên ngoài.                     |
+| Số liệu giám sát mất sau khi khởi động lại  | Số đo và log nằm trong `storage.path` 48 giờ; chỉ session, thời gian chạy và các hàng quá hạn mới mất. |
 
 ## Cường độ suy luận thích ứng
 

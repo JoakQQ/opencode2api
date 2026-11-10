@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +43,7 @@ type Config struct {
 	Models            ModelsConfig                 `json:"models"`
 	Performance       PerformanceConfig            `json:"performance"`
 	Logging           LoggingConfig                `json:"logging"`
+	Storage           StorageConfig                `json:"storage"`
 	WebUI             WebUIConfig                  `json:"webui"`
 	Prefer            Tier                         `json:"prefer"`
 	Reasoning         ReasoningConfig              `json:"reasoning"`
@@ -201,6 +203,19 @@ func (b *AnonymousBackoffConfig) Normalize() error {
 	return nil
 }
 
+// StorageConfig points the telemetry database at a SQLite file. Metrics,
+// upstream attempts and log events are written there so the console keeps its
+// history across restarts; rows older than telemetry.RetentionHours are pruned.
+// A relative path is resolved against the configuration file's directory.
+type StorageConfig struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path"`
+}
+
+// DefaultStoragePath is the database location used when the configuration does
+// not name one.
+const DefaultStoragePath = "/storage/opencode-core.db"
+
 // LoggingConfig sets the minimum log level (debug, info, warn or error) and
 // RingSize, the number of recent log events kept in memory for the WebUI.
 type LoggingConfig struct {
@@ -302,6 +317,7 @@ func Load(path string) (Config, error) {
 		Models:      ModelsConfig{RefreshSeconds: 300, Protocols: map[string]string{}},
 		Performance: PerformanceConfig{MaxIdleConns: 2048, MaxIdleConnsPerHost: 256, MaxConnsPerHost: 0, IdleConnTimeoutSeconds: 120, ConnectTimeoutSeconds: 5, FailureCooldownSeconds: 15},
 		Logging:     LoggingConfig{Level: "info", RingSize: 2000},
+		Storage:     StorageConfig{Enabled: true, Path: DefaultStoragePath},
 		WebUI:       WebUIConfig{Listen: "0.0.0.0:8081", SessionTTLMinutes: 720},
 		Prefer:      TierGo,
 	}
@@ -395,6 +411,15 @@ func Normalize(path string, cfg Config) (Config, error) {
 	}
 	if cfg.Logging.RingSize < 100 || cfg.Logging.RingSize > 50000 {
 		return Config{}, errors.New("logging.ring_size must be between 100 and 50000")
+	}
+	cfg.Storage.Path = strings.TrimSpace(cfg.Storage.Path)
+	if cfg.Storage.Enabled {
+		if cfg.Storage.Path == "" {
+			cfg.Storage.Path = DefaultStoragePath
+		}
+		if !filepath.IsAbs(cfg.Storage.Path) {
+			cfg.Storage.Path = filepath.Join(filepath.Dir(path), cfg.Storage.Path)
+		}
 	}
 	if cfg.WebUI.Password != "" && len(cfg.WebUI.Password) < 10 {
 		return Config{}, errors.New("webui.password must contain at least 10 characters")

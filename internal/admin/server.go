@@ -150,6 +150,7 @@ type ConfigView struct {
 	Models        config.ModelsConfig      `json:"models"`
 	Performance   config.PerformanceConfig `json:"performance"`
 	Logging       config.LoggingConfig     `json:"logging"`
+	Storage       config.StorageConfig     `json:"storage"`
 	Prefer        config.Tier              `json:"prefer"`
 	Reasoning     config.ReasoningConfig   `json:"reasoning"`
 	WebUI         WebUIView                `json:"webui"`
@@ -158,11 +159,14 @@ type ConfigView struct {
 }
 
 // EffectiveView is the set of listeners the running process actually bound,
-// which may differ from the configured ones until a restart.
+// which may differ from the configured ones until a restart, plus the storage
+// settings it opened.
 type EffectiveView struct {
-	Listen       string `json:"listen"`
-	WebUIListen  string `json:"webui_listen"`
-	WebUIEnabled bool   `json:"webui_enabled"`
+	Listen         string `json:"listen"`
+	WebUIListen    string `json:"webui_listen"`
+	WebUIEnabled   bool   `json:"webui_enabled"`
+	StorageEnabled bool   `json:"storage_enabled"`
+	StoragePath    string `json:"storage_path"`
 }
 
 // WebUIView is the writable part of the WebUI configuration; the password and
@@ -199,7 +203,11 @@ type ConfigUpdate struct {
 	Models        config.ModelsConfig      `json:"models"`
 	Performance   config.PerformanceConfig `json:"performance"`
 	Logging       config.LoggingConfig     `json:"logging"`
-	Prefer        config.Tier              `json:"prefer"`
+	// A pointer distinguishes an omitted field (keep the current storage
+	// settings, so an older WebUI does not disable persistence) from an
+	// explicit object.
+	Storage *config.StorageConfig `json:"storage,omitempty"`
+	Prefer  config.Tier           `json:"prefer"`
 	// A pointer distinguishes an omitted field (legacy clients should keep the
 	// current reasoning configuration) from an explicit empty object (clear it).
 	Reasoning *config.ReasoningConfig `json:"reasoning,omitempty"`
@@ -247,6 +255,10 @@ func (a *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if update.Reasoning != nil {
 		reasoning = *update.Reasoning
 	}
+	storage := current.Storage
+	if update.Storage != nil {
+		storage = *update.Storage
+	}
 	proxyBindings := current.ProxyBindings
 	if update.ProxyBindings != nil {
 		proxyBindings = update.ProxyBindings
@@ -256,7 +268,7 @@ func (a *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		Rotation:          current.Rotation,
 		Listen:            update.Listen, ServerKeys: serverKeys, ZenKeys: zenKeys, GoKeys: goKeys, Anonymous: update.Anonymous, Warp: update.Warp, Proxies: proxies, ProxyFile: update.ProxyFile,
 		ProxyBindings: proxyBindings,
-		Upstream:      update.Upstream, Retry: update.Retry, Models: update.Models, Performance: update.Performance, Logging: update.Logging, Prefer: update.Prefer,
+		Upstream:      update.Upstream, Retry: update.Retry, Models: update.Models, Performance: update.Performance, Logging: update.Logging, Storage: storage, Prefer: update.Prefer,
 		Reasoning: reasoning,
 		WebUI:     config.WebUIConfig{Enabled: update.WebUI.Enabled, Listen: update.WebUI.Listen, Username: current.WebUI.Username, PasswordHash: current.WebUI.PasswordHash, SessionTTLMinutes: update.WebUI.SessionTTLMinutes},
 	}
@@ -403,10 +415,13 @@ func (a *Server) configView() ConfigView {
 	return ConfigView{
 		Listen: cfg.Listen, ServerKeys: maskSecrets(cfg.ServerKeys, false), ZenKeys: maskSecrets(cfg.ZenKeys, false), GoKeys: maskSecrets(cfg.GoKeys, false), Anonymous: cfg.Anonymous, Warp: cfg.Warp,
 		Proxies: maskSecrets(cfg.Proxies, true), ProxyFile: cfg.ProxyFile, ProxyBindings: cfg.ProxyBindings, Upstream: cfg.Upstream, Retry: cfg.Retry, Models: cfg.Models,
-		Performance: cfg.Performance, Logging: cfg.Logging, Prefer: cfg.Prefer, Reasoning: cfg.Reasoning,
-		WebUI:     WebUIView{Enabled: cfg.WebUI.Enabled, Listen: cfg.WebUI.Listen, Username: cfg.WebUI.Username, SessionTTLMinutes: cfg.WebUI.SessionTTLMinutes},
-		Effective: EffectiveView{Listen: effective.API, WebUIListen: effective.WebUI, WebUIEnabled: effective.WebUIEnabled},
-		Restart:   restart,
+		Performance: cfg.Performance, Logging: cfg.Logging, Storage: cfg.Storage, Prefer: cfg.Prefer, Reasoning: cfg.Reasoning,
+		WebUI: WebUIView{Enabled: cfg.WebUI.Enabled, Listen: cfg.WebUI.Listen, Username: cfg.WebUI.Username, SessionTTLMinutes: cfg.WebUI.SessionTTLMinutes},
+		Effective: EffectiveView{
+			Listen: effective.API, WebUIListen: effective.WebUI, WebUIEnabled: effective.WebUIEnabled,
+			StorageEnabled: effective.StorageEnabled, StoragePath: effective.StoragePath,
+		},
+		Restart: restart,
 	}
 }
 

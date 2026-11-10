@@ -21,6 +21,9 @@ services:
         target: /run/config/opencode2api.json
     volumes:
       - opencode2api-state:/var/lib/opencode2api
+      # SQLite telemetry (storage.path). The image is read-only, so the
+      # database needs a writable mount at the configured directory.
+      - opencode2api-storage:/storage
     tmpfs:
       - /tmp
 
@@ -30,3 +33,4 @@ configs:
 
 volumes:
   opencode2api-state:
+  opencode2api-storage:
