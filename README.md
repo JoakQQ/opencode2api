@@ -99,11 +99,13 @@ For a local image:
 ```bash
 docker build -t opencode2api:local .
 docker volume create opencode2api-state
+docker volume create opencode2api-storage
 docker run -d --name opencode2api \
   -p 8080:8080 -p 8081:8081 \
   -e CONFIG_SEED_PATH=/run/config/opencode2api.json \
   -v "$(pwd)/config.json:/run/config/opencode2api.json:ro" \
   -v opencode2api-state:/var/lib/opencode2api \
+  -v opencode2api-storage:/storage \
   opencode2api:local
 ```
 
@@ -398,6 +400,8 @@ The per-attempt header timeout is capped by the request timeout. Set it below th
 | `logging.level`               | `info`; accepts `debug`, `info`, `warn`, `error`.             |
 | `logging.ring_size`           | `2000`; range 100–50,000.                                     |
 | `logging.dump_request_bodies` | `false`. Requires `debug` logging to emit outbound bodies.    |
+| `storage.enabled`             | `true`; set `false` to keep metrics and logs in memory only.  |
+| `storage.path`                | `/storage/opencode-core.db`; relative paths resolve against the configuration directory. |
 | `webui.enabled`               | `false` when omitted; the example sets it to `true`.          |
 | `webui.listen`                | `0.0.0.0:8081`.                                               |
 | `webui.username`              | Required when the WebUI is enabled; the example uses `admin`. |
@@ -475,15 +479,15 @@ Token statistics use reported usage only. Input tokens include cache reads and w
 
 | Data                                                      | Storage / retention                                                                          |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Sessions, metrics, token totals, latest Playground result | Process memory; cleared on restart.                                                          |
-| Request and attempt details                               | Recent hour, capped at 10,000 requests and 20,000 attempts; API returns at most 500 of each. |
-| Live log ring                                             | Process memory; size set by `logging.ring_size`.                                             |
-| Structured logs                                           | JSON on stdout; collect externally for durable history.                                      |
+| Sessions, latest Playground result                        | Process memory; cleared on restart.                                                          |
+| Metrics, token totals, request and attempt details        | SQLite at `storage.path` (default `/storage/opencode-core.db`); rows older than 48 hours are pruned. |
+| Live log ring                                             | Restored from `log_events` at startup; the newest `logging.ring_size` events are served.     |
+| Structured logs                                           | JSON on stdout plus `log_events`, pruned after 48 hours; collect stdout for longer history.   |
 | Configuration and previous version                        | `config.json` and `config.json.bak`.                                                         |
 | Model directory cache                                     | `config.json.models.catalog.json`.                                                           |
 | Price/deprecation cache                                   | `config.json.models.dev.json`.                                                               |
 
-Cache filenames are based on the actual configuration path. Lifetime counters mean the current process lifetime. Instances do not share sessions or monitoring state.
+Cache filenames are based on the actual configuration path. `storage.enabled` (default `true`) keeps metrics, upstream attempts and log events in the SQLite file at `storage.path` (default `/storage/opencode-core.db`), so the console keeps its history across restarts; every row older than 48 hours is pruned on an hourly sweep, while the lifetime counters are kept. Writes are batched and never block a request: if the file cannot be opened the gateway still serves and the console falls back to memory, which the event log records as `storage_unavailable`. Process uptime and admin sessions still restart with the process. Instances that point at the same database file share telemetry history; they never share sessions.
 
 ### Health checks
 
@@ -555,7 +559,7 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | HTTP 200 but generation failed       | Inspect the SSE error event and request outcome, not only HTTP status.                    |
 | Host edits have no effect in Docker  | The active file is in the state volume; import it again or use the WebUI.                 |
 | Container ports are unreachable      | Check listener addresses, published ports, and the active volume configuration.           |
-| Monitoring disappeared after restart | Monitoring is stored only in memory; collect stdout logs externally.                      |
+| Monitoring disappeared after restart | Metrics and logs live in `storage.path` for 48 hours; only sessions, uptime and rows older than the retention window are gone. |
 
 ## Adaptive reasoning effort
 

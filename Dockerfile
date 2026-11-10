@@ -24,8 +24,8 @@ FROM alpine:3.22
 RUN apk add --no-cache ca-certificates su-exec tzdata \
     && addgroup -S opencode2api \
     && adduser -S -G opencode2api -h /var/lib/opencode2api opencode2api \
-    && mkdir -p /app /var/lib/opencode2api \
-    && chown -R opencode2api:opencode2api /app /var/lib/opencode2api
+    && mkdir -p /app /storage /var/lib/opencode2api \
+    && chown -R opencode2api:opencode2api /app /storage /var/lib/opencode2api
 
 COPY --from=builder /out/opencode2api /usr/local/bin/opencode2api
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint

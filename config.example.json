@@ -44,6 +44,10 @@
     "ring_size": 2000,
     "dump_request_bodies": false
   },
+  "storage": {
+    "enabled": true,
+    "path": "/storage/opencode-core.db"
+  },
   "webui": {
     "enabled": true,
     "listen": "0.0.0.0:8081",

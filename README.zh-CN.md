@@ -99,11 +99,13 @@ WARP 只需要出站 UDP（Cloudflare 端点端口 `2408`），因此镜像的�
 ```bash
 docker build -t opencode2api:local .
 docker volume create opencode2api-state
+docker volume create opencode2api-storage
 docker run -d --name opencode2api \
   -p 8080:8080 -p 8081:8081 \
   -e CONFIG_SEED_PATH=/run/config/opencode2api.json \
   -v "$(pwd)/config.json:/run/config/opencode2api.json:ro" \
   -v opencode2api-state:/var/lib/opencode2api \
+  -v opencode2api-storage:/storage \
   opencode2api:local
 ```
 
@@ -392,6 +394,8 @@ pool+http://127.0.0.1:7891
 | `logging.level`               | `info`；可选 `debug`、`info`、`warn`、`error`。 |
 | `logging.ring_size`           | `2000`；范围为 100–50,000。                     |
 | `logging.dump_request_bodies` | `false`；配合 `debug` 日志级别输出上游请求体。  |
+| `storage.enabled`             | `true`；设为 `false` 时指标与日志仅保存在内存。  |
+| `storage.path`                | `/storage/opencode-core.db`；相对路径按配置文件所在目录解析。 |
 | `webui.enabled`               | 省略时为 `false`；示例配置设置为 `true`。       |
 | `webui.listen`                | `0.0.0.0:8081`。                                |
 | `webui.username`              | 启用 WebUI 时必填；示例为 `admin`。             |
@@ -469,15 +473,15 @@ Token 统计仅使用上游报告的 usage。输入 Token 包含缓存读取和�
 
 | 数据                                            | 保存位置或保留规则                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| Session、指标、Token 累计、最近 Playground 结果 | 进程内存；重启清空。                                                      |
-| 请求与尝试明细                                  | 最近一小时，最多 10,000 个请求和 20,000 次尝试；API 分别最多返回 500 条。 |
-| 实时日志环形缓冲                                | 进程内存，大小由 `logging.ring_size` 指定。                               |
-| 结构化日志                                      | stdout JSON；需要长期保留时由外部系统收集。                               |
+| Session、最近 Playground 结果                   | 进程内存；重启清空。                                                      |
+| 指标、Token 累计、请求与尝试明细                | `storage.path`（默认 `/storage/opencode-core.db`）中的 SQLite；超过 48 小时的行会被清理。 |
+| 实时日志环形缓冲                                | 启动时从 `log_events` 恢复，返回最近 `logging.ring_size` 条。             |
+| 结构化日志                                      | stdout JSON，同时写入 `log_events` 并在 48 小时后清理；更长的历史需外部收集。 |
 | 当前配置与上一版本                              | `config.json`、`config.json.bak`。                                        |
 | 模型目录缓存                                    | `config.json.models.catalog.json`。                                       |
 | 成本与弃用信息缓存                              | `config.json.models.dev.json`。                                           |
 
-缓存文件名基于实际配置路径生成。lifetime 仅表示当前进程运行期间的累计，各实例之间不共享 Session 或监控状态。
+缓存文件名基于实际配置路径生成。`storage.enabled`（默认 `true`）把指标、上游尝试与日志事件保存到 `storage.path`（默认 `/storage/opencode-core.db`）的 SQLite 文件，重启后控制台仍有历史；每小时清理超过 48 小时的行，lifetime 累计则保留。写入批量进行且不阻塞请求：文件无法打开时网关照常服务，控制台退回内存模式，并在事件日志中记录 `storage_unavailable`。进程运行时长与管理登录 Session 仍随进程重启。指向同一数据库文件的实例共享遥测历史，但不共享 Session。
 
 ### 健康检查
 
@@ -549,7 +553,7 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | HTTP 200 但生成失败           | 查看 SSE 错误事件和请求结果，不能只看 HTTP 状态。  |
 | Docker 中宿主机配置修改不生效 | 当前配置在状态卷中；重新导入，或通过 WebUI 修改。  |
 | 无法通过容器端口访问          | 检查监听地址、端口映射和状态卷中的实际配置。       |
-| 重启后监控消失                | 监控仅保存在内存，需要外部收集 stdout 日志。       |
+| 重启后监控消失                | 指标与日志保存在 `storage.path` 中，保留 48 小时；只有 Session、运行时长和超过保留窗口的行会消失。 |
 
 ## 自适应思考强度
 

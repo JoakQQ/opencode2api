@@ -99,11 +99,13 @@ Per creare un'immagine locale:
 ```bash
 docker build -t opencode2api:local .
 docker volume create opencode2api-state
+docker volume create opencode2api-storage
 docker run -d --name opencode2api \
   -p 8080:8080 -p 8081:8081 \
   -e CONFIG_SEED_PATH=/run/config/opencode2api.json \
   -v "$(pwd)/config.json:/run/config/opencode2api.json:ro" \
   -v opencode2api-state:/var/lib/opencode2api \
+  -v opencode2api-storage:/storage \
   opencode2api:local
 ```
 
@@ -377,6 +379,8 @@ Il timeout degli header per tentativo è limitato dal timeout della richiesta. I
 | `logging.level`               | `info`; accetta `debug`, `info`, `warn`, `error`.        |
 | `logging.ring_size`           | `2000`; intervallo 100–50.000.                           |
 | `logging.dump_request_bodies` | `false`; richiede il livello `debug` per emettere i body in uscita. |
+| `storage.enabled`             | `true`; con `false` metriche e log restano solo in memoria. |
+| `storage.path`                | `/storage/opencode-core.db`; i percorsi relativi sono risolti rispetto alla directory della configurazione. |
 | `webui.enabled`               | `false` se omesso; la configurazione di esempio usa `true`. |
 | `webui.listen`                | `0.0.0.0:8081`.                                          |
 | `webui.username`              | Obbligatorio con WebUI attiva; l'esempio usa `admin`.    |
@@ -454,15 +458,15 @@ Le statistiche dei token usano solo i valori riportati. I token input includono 
 
 | Dati                                                     | Memorizzazione / conservazione                                                       |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Sessioni, metriche, totali token, ultimo risultato Playground | Memoria del processo; cancellati al riavvio.                                    |
-| Dettagli di richieste e tentativi                        | Ultima ora, massimo 10.000 richieste e 20.000 tentativi; API fino a 500 per tipo.   |
-| Buffer circolare dei log                                 | Memoria del processo; dimensione impostata da `logging.ring_size`.                  |
-| Log strutturati                                          | JSON su stdout; raccoglili esternamente per conservarli.                            |
+| Sessioni, ultimo risultato Playground                   | Memoria del processo; cancellati al riavvio.                                        |
+| Metriche, totali token, dettagli di richieste e tentativi | SQLite in `storage.path` (predefinito `/storage/opencode-core.db`); le righe più vecchie di 48 ore vengono eliminate. |
+| Buffer circolare dei log                                 | Ripristinato da `log_events` all'avvio; vengono serviti gli ultimi `logging.ring_size` eventi. |
+| Log strutturati                                          | JSON su stdout e in `log_events`, eliminati dopo 48 ore; raccogli stdout per una storia più lunga. |
 | Configurazione e versione precedente                     | `config.json` e `config.json.bak`.                                                   |
 | Cache del catalogo modelli                               | `config.json.models.catalog.json`.                                                  |
 | Cache prezzi/deprecazioni                                | `config.json.models.dev.json`.                                                      |
 
-I nomi dei file di cache dipendono dal percorso effettivo della configurazione. I contatori di durata si riferiscono al processo corrente. Le istanze non condividono sessioni o stato di monitoraggio.
+I nomi dei file di cache dipendono dal percorso effettivo della configurazione. Con `storage.enabled` (predefinito `true`) metriche, tentativi upstream ed eventi di log finiscono nel file SQLite indicato da `storage.path` (predefinito `/storage/opencode-core.db`), così la console conserva la cronologia dopo un riavvio; ogni ora vengono eliminate le righe più vecchie di 48 ore, mentre i contatori di durata restano. Le scritture sono raggruppate e non bloccano mai una richiesta: se il file non si apre, il gateway continua a servire e la console torna alla memoria, con l'evento `storage_unavailable` nel log. Uptime del processo e sessioni admin ripartono comunque con il processo. Le istanze che usano lo stesso file condividono la cronologia di telemetria, mai le sessioni.
 
 ### Health check
 
@@ -534,7 +538,7 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | HTTP 200 ma generazione non riuscita      | Controlla l'evento di errore SSE e l'esito della richiesta, non solo lo stato HTTP.       |
 | Le modifiche host non hanno effetto in Docker | Il file attivo è nel volume di stato; importalo di nuovo o usa la WebUI.              |
 | Le porte del container non sono raggiungibili | Controlla indirizzi di ascolto, porte pubblicate e configurazione del volume attivo. |
-| Il monitoraggio scompare dopo il riavvio   | È conservato solo in memoria; raccogli esternamente i log stdout.                        |
+| Il monitoraggio scompare dopo il riavvio   | Metriche e log restano in `storage.path` per 48 ore; si perdono solo sessioni, uptime e le righe oltre la finestra di conservazione. |
 
 ## Livello di ragionamento adattivo
 

@@ -310,7 +310,9 @@ func seriesStep(usageMinutes int64) int64 {
 
 // Metrics aggregates request, token usage and upstream attempt statistics for
 // the WebUI monitor: totals since start plus a per-minute view of the usage
-// window. The request counters are atomic; mu guards everything else.
+// window. The request counters are atomic; mu guards everything else. When a
+// Store is attached, finished minutes and the recent ledger are written to it,
+// and the same Store hydrates the windows after a restart.
 type Metrics struct {
 	started         time.Time
 	active          atomic.Int64
@@ -326,18 +328,161 @@ type Metrics struct {
 	attemptBuckets  [60]attemptBucket
 	recentRequests  upstreamRequestBuffer
 	recentAttempts  upstreamAttemptBuffer
+	store           *Store
+	dirty           map[int64]struct{}
+	lifetimeDirty   bool
+	flushStop       chan struct{}
+	flushDone       chan struct{}
 }
 
-// Monitor creates an empty Metrics whose uptime starts now.
-func Monitor() *Metrics {
-	return &Metrics{
+// Monitor creates Metrics whose uptime starts now. With a Store, the usage
+// windows, lifetime totals and the recent ledger are restored from it so a
+// restart does not clear the console.
+func Monitor(store *Store) (*Metrics, error) {
+	m := &Metrics{
 		started:         time.Now().UTC(),
 		lifetimeUsage:   usagePeriod(),
 		sessionSeen:     make(map[string]int64),
 		attemptLifetime: attemptAggregate(),
 		recentRequests:  upstreamRequestRing(),
 		recentAttempts:  upstreamAttemptRing(),
+		store:           store,
+		dirty:           make(map[int64]struct{}),
+		flushStop:       make(chan struct{}),
+		flushDone:       make(chan struct{}),
 	}
+	if store == nil {
+		close(m.flushDone)
+		return m, nil
+	}
+	if err := m.hydrate(); err != nil {
+		return nil, err
+	}
+	go m.flushLoop()
+	return m, nil
+}
+
+// hydrate loads the retained minute buckets, the lifetime totals and the
+// recent request and attempt ledger from the store.
+func (m *Metrics) hydrate() error {
+	now := time.Now()
+	nowMinute := now.Unix() / 60
+	buckets, err := m.store.loadMinutes(nowMinute - usageWindowMinutes + 1)
+	if err != nil {
+		return err
+	}
+	for _, bucket := range buckets {
+		m.buckets[bucket.minute%usageWindowMinutes] = bucket
+	}
+	totals, ok, err := m.store.loadLifetime()
+	if err != nil {
+		return err
+	}
+	if ok {
+		m.lifetimeUsage = totals.Usage
+		m.attemptLifetime = totals.Attempt
+		m.total.Store(totals.Total)
+		m.success.Store(totals.Success)
+		m.errors.Store(totals.Errors)
+		for session := range totals.Usage.Sessions {
+			m.sessionSeen[session] = now.UnixNano()
+		}
+	}
+	requests, err := m.store.loadRequests(now.Add(-time.Hour), monitorRecentRequestCapacity)
+	if err != nil {
+		return err
+	}
+	for _, request := range requests {
+		m.recentRequests.Add(request)
+	}
+	attemptsRecent, err := m.store.loadAttempts(now.Add(-time.Hour), monitorRecentAttemptCapacity)
+	if err != nil {
+		return err
+	}
+	for _, attempt := range attemptsRecent {
+		m.recentAttempts.Add(attempt)
+		// Rebuild the last-hour attempt aggregate the ring no longer holds in
+		// memory, so the upstream window survives a restart too.
+		minute := attempt.Time.Unix() / 60
+		if minute < nowMinute-summaryWindowMinutes+1 {
+			continue
+		}
+		bucket := &m.attemptBuckets[minute%60]
+		if bucket.minute != minute {
+			*bucket = attemptBucket{minute: minute, aggregate: attemptAggregate()}
+		}
+		recordAttemptAggregate(&bucket.aggregate, attempt)
+	}
+	return nil
+}
+
+// flushLoop writes the dirty minute buckets and the lifetime totals every few
+// seconds, so a restart loses at most that interval.
+func (m *Metrics) flushLoop() {
+	defer close(m.flushDone)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.flushStop:
+			m.flush()
+			return
+		case <-ticker.C:
+			m.flush()
+		}
+	}
+}
+
+// flush copies the dirty buckets and the lifetime totals under the lock, then
+// queues them; the store batches the writes.
+func (m *Metrics) flush() {
+	if m.store == nil {
+		return
+	}
+	m.mu.Lock()
+	buckets := make([]metricBucket, 0, len(m.dirty))
+	for minute := range m.dirty {
+		if bucket := &m.buckets[minute%usageWindowMinutes]; bucket.minute == minute {
+			buckets = append(buckets, *bucket)
+		}
+		delete(m.dirty, minute)
+	}
+	usage := cloneUsagePeriod(m.lifetimeUsage)
+	attempts := cloneAttemptAggregate(m.attemptLifetime)
+	lifetimeDirty := m.lifetimeDirty
+	m.lifetimeDirty = false
+	totals := lifetimeTotals{
+		Usage: usage, Attempt: attempts,
+		Total: m.total.Load(), Success: m.success.Load(), Errors: m.errors.Load(),
+	}
+	m.mu.Unlock()
+	for _, bucket := range buckets {
+		m.store.persistMinute(bucket)
+	}
+	if lifetimeDirty || len(buckets) > 0 {
+		m.store.persistLifetime(totals)
+	}
+}
+
+// markDirty records that minute changed. The caller holds m.mu.
+func (m *Metrics) markDirty(minute int64) {
+	if m.store != nil {
+		m.dirty[minute] = struct{}{}
+	}
+}
+
+// Close flushes the final state and stops the background writer. The Store is
+// closed separately, which drains the queued writes.
+func (m *Metrics) Close() {
+	if m.store == nil {
+		return
+	}
+	select {
+	case <-m.flushStop:
+	default:
+		close(m.flushStop)
+	}
+	<-m.flushDone
 }
 
 // BeginStream records a stream entering its response body phase.
@@ -429,8 +574,13 @@ func (m *Metrics) Record(endpoint string, status int, duration time.Duration, me
 			}
 			m.recentRequests.PruneBefore(request.Time.Add(-time.Hour))
 			m.recentRequests.Add(request)
+			if m.store != nil {
+				m.store.persistRequest(request)
+			}
 		}
 	}
+	m.markDirty(minute)
+	m.lifetimeDirty = true
 	m.mu.Unlock()
 }
 
@@ -479,6 +629,10 @@ func (m *Metrics) RecordAttempt(attempt UpstreamAttempt) {
 	recordAttemptAggregate(&bucket.aggregate, attempt)
 	m.recentAttempts.PruneBefore(attempt.Time.Add(-time.Hour))
 	m.recentAttempts.Add(attempt)
+	if m.store != nil {
+		m.store.persistAttempt(attempt)
+		m.lifetimeDirty = true
+	}
 	m.mu.Unlock()
 }
 

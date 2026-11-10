@@ -17,6 +17,11 @@ coverage.out
 *.rotation.json
 .rotation-*.tmp
 
+# Telemetry database (storage.path) when configured inside the repository
+*.db
+*.db-wal
+*.db-shm
+
 # Local credentials, deployment backups, and verification artifacts
 .local/
 *.availability.json
