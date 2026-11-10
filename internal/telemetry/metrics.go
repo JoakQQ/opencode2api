@@ -287,9 +287,26 @@ const (
 const (
 	usageWindowMinutes   = MaxUsageWindowHours * 60
 	summaryWindowMinutes = 60
-	// seriesStepMinutes groups usage buckets into one trend point.
+	// seriesStepMinutes is the trend bucket width while the window still fits
+	// in maxSeriesBuckets bars: five minutes up to four hours.
 	seriesStepMinutes = 5
+	// maxSeriesBuckets caps how many bars the Usage tab draws, so a wider
+	// window widens the buckets instead of shrinking the bars. At five minutes
+	// per bucket the cap is reached exactly at four hours.
+	maxSeriesBuckets = 48
 )
+
+// seriesStep returns the trend bucket width in minutes for a window of
+// usageMinutes. A window that fits maxSeriesBuckets five-minute buckets keeps
+// them; a wider one uses the smallest whole number of minutes that keeps the
+// bar count at or below the cap, so 12 hours becomes 15-minute bars and 24
+// hours 30-minute bars.
+func seriesStep(usageMinutes int64) int64 {
+	if usageMinutes <= maxSeriesBuckets*seriesStepMinutes {
+		return seriesStepMinutes
+	}
+	return (usageMinutes + maxSeriesBuckets - 1) / maxSeriesBuckets
+}
 
 // Metrics aggregates request, token usage and upstream attempt statistics for
 // the WebUI monitor: totals since start plus a per-minute view of the usage
@@ -559,7 +576,8 @@ func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
 	endpoints, models, tiers, statuses := map[string]uint64{}, map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
 	usageWindow := usagePeriod()
 	upstreamWindow := attemptAggregate()
-	series := make([]MetricSeries, 0, int(usageMinutes)/seriesStepMinutes)
+	step := seriesStep(usageMinutes)
+	series := make([]MetricSeries, 0, int((usageMinutes+step-1)/step))
 	var recentRequests []UpstreamRequest
 	var recentAttempts []UpstreamAttempt
 	m.mu.Lock()
@@ -586,8 +604,7 @@ func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
 		}
 	}
 	// Token usage and its trend cover the requested usage window, grouped into
-	// seriesStepMinutes buckets so a long trend stays readable.
-	step := int64(seriesStepMinutes)
+	// step-sized buckets so a long window stays readable.
 	for offset := usageMinutes - 1; offset >= 0; offset -= step {
 		entry := MetricSeries{Minute: time.Unix((nowMinute-offset)*60, 0).UTC()}
 		for i := int64(0); i < step; i++ {
@@ -642,7 +659,7 @@ func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
 	}
 	return MonitorSnapshot{
 		StartedAt: m.started, UptimeSeconds: int64(time.Since(m.started).Seconds()), Active: m.active.Load(),
-		ActiveStreams: m.activeStreams.Load(), Lifetime: lifetime, Window: window, Series: series, SeriesStepMinutes: seriesStepMinutes, UsageHours: usageHours,
+		ActiveStreams: m.activeStreams.Load(), Lifetime: lifetime, Window: window, Series: series, SeriesStepMinutes: int(step), UsageHours: usageHours,
 		Endpoints: endpoints, Models: models, Tiers: tiers, Statuses: statuses,
 		Usage:    UsageSnapshot{Lifetime: usageLifetime, Window: usageWindow},
 		Upstream: UpstreamSnapshot{Lifetime: upstreamLifetime, Window: upstreamWindow, Requests: recentRequests, Recent: recentAttempts},

@@ -173,11 +173,18 @@ function renderTrend(metrics) {
   const hours = currentUsageHours(store.get("monitor"));
   const maximum = Math.max(1, ...series.map((point) => point.total_tokens || 0));
   trend.replaceChildren();
-  series.forEach((point) => {
+  series.forEach((point, index) => {
     const bar = el("div", { class: "trend-bar" });
     bar.style.height = `${Math.max(2, Math.round(((point.total_tokens || 0) / maximum) * 100))}%`;
-    const end = new Date(new Date(point.minute).getTime() + stepMinutes * 60000);
-    bar.title = `${timeOnly(point.minute)}–${timeOnly(end)} · input ${formatNumber(point.input_tokens)} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
+    // Each point starts where the previous one ended, so the tooltip shows the
+    // real bucket width even when the interval is not a round number. The last
+    // bucket ends at the current minute, never in the future.
+    const start = new Date(point.minute);
+    const next = series[index + 1];
+    const end = next
+      ? new Date(next.minute)
+      : new Date(Math.min(start.getTime() + stepMinutes * 60000, Date.now()));
+    bar.title = `${timeOnly(start)}–${timeOnly(end)} · input ${formatNumber(point.input_tokens)} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
     trend.append(bar);
   });
   $("#usage-trend-caption").textContent = t(
