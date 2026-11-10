@@ -301,9 +301,13 @@ func (a *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMonitor answers with the build version, the metrics snapshot and the
-// current resource counts.
-func (a *Server) handleMonitor(w http.ResponseWriter, _ *http.Request) {
-	metrics := a.monitor.Snapshot()
+// current resource counts. usage_hours selects the Usage tab window.
+func (a *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
+	usageHours := telemetry.DefaultUsageWindowHours
+	if value, err := strconv.Atoi(r.URL.Query().Get("usage_hours")); err == nil {
+		usageHours = value
+	}
+	metrics := a.monitor.Snapshot(usageHours)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"version": buildinfo.Version, "metrics": metrics, "usage": metrics.Usage, "upstream": metrics.Upstream, "resources": a.manager.Resources(),
 	})

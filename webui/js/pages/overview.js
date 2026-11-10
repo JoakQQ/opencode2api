@@ -2,6 +2,14 @@
 import * as store from "../store.js";
 import { $, bindTabs, el, emptyRow, formatNumber, timeOnly } from "../ui.js";
 import { t, onChange } from "../i18n.js";
+import { USAGE_HOURS, getUsageHours, refreshMonitor, setUsageHours } from "../data.js";
+
+let usageHoursPending = 0;
+let usageHoursTimer = null;
+
+function currentUsageHours(monitor) {
+  return usageHoursPending || monitor?.usage_hours || getUsageHours();
+}
 
 function renderChecklist() {
   const config = store.get("config");
@@ -161,20 +169,29 @@ function renderSummary(monitor) {
 function renderTrend(metrics) {
   const trend = $("#usage-trend");
   const series = metrics?.series || [];
+  const stepMinutes = metrics?.series_step_minutes || 5;
+  const hours = currentUsageHours(store.get("monitor"));
   const maximum = Math.max(1, ...series.map((point) => point.total_tokens || 0));
   trend.replaceChildren();
   series.forEach((point) => {
     const bar = el("div", { class: "trend-bar" });
     bar.style.height = `${Math.max(2, Math.round(((point.total_tokens || 0) / maximum) * 100))}%`;
-    bar.title = `${timeOnly(point.minute)} · input ${formatNumber(point.input_tokens)} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
+    const end = new Date(new Date(point.minute).getTime() + stepMinutes * 60000);
+    bar.title = `${timeOnly(point.minute)}–${timeOnly(end)} · input ${formatNumber(point.input_tokens)} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
     trend.append(bar);
   });
+  $("#usage-trend-caption").textContent = t(
+    "最近 {0} 小时；悬停查看输入、输出与总量。",
+    "usage.trend.caption",
+    hours,
+  );
   $("#usage-trend-meta").textContent = series.length
     ? t(
-        `峰值 ${formatNumber(maximum)} tokens / 分钟 · 近 ${series.length} 分钟`,
+        `峰值 ${formatNumber(maximum)} tokens / ${stepMinutes} 分钟 · 近 ${hours} 小时`,
         "usage.trend.peak",
         formatNumber(maximum),
-        series.length,
+        stepMinutes,
+        hours,
       )
     : t("尚无趋势数据", "usage.trend.empty");
 }
@@ -219,13 +236,23 @@ function renderTiers(usage) {
   if (!entries.length) host.append(el("div", { class: "empty", text: t("尚无 Tier 用量", "usage.empty.tiers") }));
 }
 
+function renderUsageWindow(hours) {
+  const slider = $("#usage-hours");
+  const output = $("#usage-hours-value");
+  if (slider && document.activeElement !== slider) slider.value = String(hours);
+  if (output) output.textContent = t("{0} 小时", "usage.window.value", hours);
+}
+
 function renderUsage(monitor) {
-  const usage = monitor.usage?.last_hour || {};
+  const usage = monitor.usage?.window || {};
   const tokens = usage.tokens || {};
+  const hours = currentUsageHours(monitor);
+  $("#u-window-note").textContent = t("最近 {0} 小时", "usage.hour", hours);
   $("#u-coverage").textContent = `${((usage.coverage || 0) * 100).toFixed(1)}%`;
   $("#u-total").textContent = formatNumber(tokens.total_tokens);
   $("#u-cached").textContent = formatNumber(tokens.cached_tokens);
   $("#u-reasoning").textContent = formatNumber(tokens.reasoning_tokens);
+  renderUsageWindow(hours);
   renderTrend(monitor.metrics);
   renderUsageModels(usage);
   renderTiers(usage);
@@ -245,6 +272,23 @@ export default {
   sub: "运行指标、Token 用量与资源状态。",
   init() {
     bindTabs($("#page-overview"));
+    const slider = $("#usage-hours");
+    if (slider) {
+      slider.min = String(USAGE_HOURS.min);
+      slider.max = String(USAGE_HOURS.max);
+      slider.step = String(USAGE_HOURS.step);
+      renderUsageWindow(getUsageHours());
+      slider.addEventListener("input", () => {
+        const hours = setUsageHours(slider.value);
+        usageHoursPending = hours;
+        renderUsageWindow(hours);
+        clearTimeout(usageHoursTimer);
+        usageHoursTimer = setTimeout(async () => {
+          await refreshMonitor();
+          usageHoursPending = 0;
+        }, 250);
+      });
+    }
     store.on("monitor", render);
     store.on("config", renderChecklist);
     onChange(render);

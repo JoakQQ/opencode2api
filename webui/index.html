@@ -198,7 +198,7 @@
                 <div class="metric">
                   <div class="metric-label" data-i18n="usage.total">Token 总量</div>
                   <div id="u-total" class="metric-value">—</div>
-                  <div class="metric-note" data-i18n="usage.hour">最近 60 分钟</div>
+                  <div id="u-window-note" class="metric-note">最近 12 小时</div>
                 </div>
                 <div class="metric">
                   <div class="metric-label" data-i18n="usage.cached">缓存 Token</div>
@@ -214,9 +214,14 @@
               <section class="section">
                 <div class="section-head">
                   <div>
-                    <h2 class="section-title" data-i18n="usage.trend.title">每分钟 Token 趋势</h2>
-                    <p class="section-caption" data-i18n="usage.trend.caption">最近 60 分钟；悬停查看输入、输出与总量。</p>
+                    <h2 class="section-title" data-i18n="usage.trend.title">Token 趋势</h2>
+                    <p id="usage-trend-caption" class="section-caption">最近 12 小时；悬停查看输入、输出与总量。</p>
                   </div>
+                  <label class="usage-window" for="usage-hours">
+                    <span data-i18n="usage.window">时间范围</span>
+                    <input id="usage-hours" type="range" min="1" max="24" step="1" value="12" />
+                    <output id="usage-hours-value" for="usage-hours">12 小时</output>
+                  </label>
                 </div>
                 <div id="usage-trend" class="trend"></div>
                 <div id="usage-trend-meta" class="trend-meta"></div>
