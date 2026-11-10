@@ -1,10 +1,12 @@
 # opencode2api
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-HK.md) | [Tiếng Việt](README.vi.md) | [Italiano](README.it.md)
 
 Gateway scritto in Go per **OpenCode Zen e Zen Go**. Espone gli endpoint Chat Completions, Responses e Anthropic Messages, traduce tra i rispettivi protocolli nativi e gestisce le chiavi upstream e i proxy.
 
 L'eseguibile include la WebUI: per eseguire il servizio non servono Node.js né un database.
+
+> **Fork:** questo repository è un fork di [opencode2api](https://github.com/jasonxu114514/opencode2api), il progetto originale.
 
 ## Funzionalità
 
@@ -23,28 +25,12 @@ L'eseguibile include la WebUI: per eseguire il servizio non servono Node.js né 
 
 Consulta la [guida della console di gestione (in cinese)](docs/management.zh-CN.md) per informazioni sulle nuove pagine e sulla configurazione.
 
-## Sponsor
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">
-        <img src="assets/IPWO.png" width="163" alt="IPWO">
-      </a>
-    </td>
-    <td>
-      <a href="https://www.ipwo.net/?ref=githubopencode2api">IPWO</a> offre proxy residenziali con connettività di rete flessibile per lo sviluppo di AI e workflow API, coprendo oltre 195 paesi e regioni con supporto HTTP(S) e SOCKS5.<br>
-      Adatti a test di rete cross-region, raccolta dati conforme e sviluppo automatizzato. Sono disponibili proxy dinamici, statici e illimitati, con test gratuito e selezione della regione. Codice sconto: <b>0200</b>.
-    </td>
-  </tr>
-</table>
-
 ## Avvio rapido
 
-Scarica un binario da [GitHub Releases](https://github.com/jasonxu114514/opencode2api/releases) oppure compila con **Go 1.24 o superiore**:
+Scarica un binario da [GitHub Releases](https://github.com/JoakQQ/opencode2api/releases) oppure compila con **Go 1.24 o superiore**:
 
 ```bash
-git clone https://github.com/jasonxu114514/opencode2api.git
+git clone https://github.com/JoakQQ/opencode2api.git
 cd opencode2api
 cp config.example.json config.json
 go build -o opencode2api ./cmd/opencode2api
@@ -76,7 +62,7 @@ La directory di configurazione deve essere scrivibile per migrare la password, s
 
 ## Docker
 
-L'immagine pubblicata è `ghcr.io/jasonxu114514/opencode2api`.
+`compose.yaml` punta ancora all'immagine del registro upstream; compila l'immagine qui sotto per eseguire il codice di questo fork, oppure pubblica la tua e imposta `OPENCODE2API_VERSION`.
 
 ```bash
 cp config.example.json config.json
@@ -440,12 +426,15 @@ Al termine, l'endpoint di gestione restituisce HTTP 200 e il risultato effettivo
 
 ### Lingua dell'interfaccia
 
-La WebUI carica le traduzioni da `webui/js/i18n.js`. Include **简体中文** (predefinito), **English**, **Tiếng Việt** e **Italiano**. I testi originali in cinese semplificato restano in `index.html` e `webui/js/` e vengono usati come fallback per ogni stringa non tradotta; aggiungere una lingua non modifica quindi il testo originale.
+La WebUI carica le traduzioni da `webui/js/i18n.js`. Include **简体中文** (predefinito), **繁體中文（HK）**, **English**, **Tiếng Việt** e **Italiano**. I testi originali in cinese semplificato restano in `index.html` e `webui/js/` e vengono usati come fallback per ogni stringa non tradotta; aggiungere una lingua non modifica quindi il testo originale.
+
+Il blocco `zh-HK` è completo: ogni chiave è tradotta in cinese tradizionale con terminologia di Hong Kong (`設定`, `快取`, `帳號`, `登入`, `伺服器`, `預設`, `搜尋`), quindi la voce 繁體中文（HK） non ricade mai sui testi semplificati; le date usano la locale `zh-HK`.
 
 - Il selettore si trova nella barra superiore e nella scheda di accesso.
 - La scelta è salvata in `localStorage` con la chiave `opencode2api.ui.lang`.
 - Il cambio lingua aggiorna i testi statici (`data-i18n`, `data-i18n-attr`) e quelli generati da JavaScript senza ricaricare la pagina.
 - Date e orari seguono la lingua selezionata.
+- Un browser con `zh-HK`, `zh-TW` o `zh-MO` parte in cinese tradizionale; le altre varianti `zh` partono in cinese semplificato.
 
 Per aggiungere una lingua, inserisci un blocco in `DICTIONARY` in `webui/js/i18n.js`, registra il codice in `SUPPORTED`, `LABELS`, `FLAGS` e `DATE_LOCALES` e aggiungilo alla catena di rilevamento `browserLocale`.
 
@@ -532,7 +521,7 @@ Node.js serve solo per controllare la sintassi JavaScript della WebUI:
 for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check < "$f"; done
 ```
 
-`.editorconfig`, `.gitattributes` e la formattazione Go standardizzano il codice. La CI esegue `go vet` e build con Go 1.24 e la versione stabile su Linux/Windows, oltre ai controlli di formattazione Go, sintassi WebUI e sintassi shell dell'entrypoint. Gli archivi di release includono tutti e quattro i README.
+`.editorconfig`, `.gitattributes` e la formattazione Go standardizzano il codice. La CI esegue `go vet` e build con Go 1.24 e la versione stabile su Linux/Windows, oltre ai controlli di formattazione Go, sintassi WebUI e sintassi shell dell'entrypoint. Gli archivi di release includono tutti e cinque i README.
 
 ## Risoluzione dei problemi
 
@@ -547,17 +536,17 @@ for f in webui/js/*.js webui/js/pages/*.js; do node --input-type=module --check 
 | Le porte del container non sono raggiungibili | Controlla indirizzi di ascolto, porte pubblicate e configurazione del volume attivo. |
 | Il monitoraggio scompare dopo il riavvio   | È conservato solo in memoria; raccogli esternamente i log stdout.                        |
 
-## Ringraziamenti
-
-Grazie alla community [LINUX DO](https://linux.do) per il supporto.
-
-### Livello di ragionamento adattivo
+## Livello di ragionamento adattivo
 
 Imposta `reasoning.effort` (o un override per modello) su `auto` per usare il livello più alto verificato con successo dal controllo dei modelli gratuiti. I livelli concreti mantengono il proprio significato e il livello specificato dal client ha la precedenza. Non viene mantenuta una lista di modelli consentiti.
 
 Dopo il successo di un livello di base, i modelli con capacità di ragionamento vengono verificati nell'ordine `max`, `xhigh`, `high`, `medium`, `low`, `minimal`. Si passa a un livello inferiore solo se un parametro di ragionamento viene rifiutato esplicitamente. Gli errori transitori interrompono la ricerca e non vengono interpretati come un limite di capacità inferiore. Se tutti i livelli vengono rifiutati, non viene applicato alcun override di ragionamento.
 
 Le osservazioni sono persistite per URL upstream, modello e protocollo nativo, mostrate nella pagina di disponibilità e usate per non più di due ore. I controlli attivi coprono solo modelli Zen/anonimi gratuiti; modelli Go/a pagamento, capacità sconosciute e livelli non verificati non ricevono override automatici. Impostare `auto` non amplia l'ambito dei controlli e non garantisce che gli upstream applichino ogni campo accettato. Il controllo può richiedere diverse piccole richieste per modello e consumare la quota upstream.
+
+## Ringraziamenti
+
+Questo repository è un fork di [opencode2api](https://github.com/jasonxu114514/opencode2api) di [jasonxu114514](https://github.com/jasonxu114514). Il design del gateway, la traduzione dei protocolli, l'uscita WARP, la rotazione dei modelli e gran parte di questa documentazione provengono da lì; il merito del lavoro originale è dei suoi autori. Le modifiche locali di questo fork sono mantenute separatamente con la stessa licenza GPL-3.0-or-later.
 
 ## Licenza
 

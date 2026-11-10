@@ -9,8 +9,9 @@ import (
 	"opencode2api/internal/protocol"
 )
 
-// metricBucket holds the request metrics of one minute. Metrics keeps 60 of
-// them, indexed by minute modulo 60, to cover the last hour.
+// metricBucket holds the request metrics of one minute. Metrics keeps
+// usageWindowMinutes of them, indexed by minute modulo usageWindowMinutes, so
+// token usage can cover the full usage window.
 type metricBucket struct {
 	minute        int64
 	total         uint64
@@ -75,10 +76,11 @@ type ServerKeyUsage struct {
 	TokenCounts
 }
 
-// UsageSnapshot is the token usage since start and over the last hour.
+// UsageSnapshot is the token usage since start and over the requested usage
+// window.
 type UsageSnapshot struct {
 	Lifetime UsagePeriod `json:"lifetime"`
-	Window   UsagePeriod `json:"last_hour"`
+	Window   UsagePeriod `json:"window"`
 }
 
 // AttemptCounts counts upstream attempts by result.
@@ -273,9 +275,42 @@ func (ring *upstreamAttemptBuffer) Snapshot(cutoff time.Time, limit int) []Upstr
 	return result
 }
 
+// Usage window bounds for the WebUI Usage tab.
+const (
+	MinUsageWindowHours     = 1
+	MaxUsageWindowHours     = 24
+	DefaultUsageWindowHours = 12
+)
+
+// usageWindowMinutes is the deepest token usage history the ring keeps.
+// summaryWindowMinutes is the request summary and breakdown window.
+const (
+	usageWindowMinutes   = MaxUsageWindowHours * 60
+	summaryWindowMinutes = 60
+	// seriesStepMinutes is the trend bucket width while the window still fits
+	// in maxSeriesBuckets bars: five minutes up to four hours.
+	seriesStepMinutes = 5
+	// maxSeriesBuckets caps how many bars the Usage tab draws, so a wider
+	// window widens the buckets instead of shrinking the bars. At five minutes
+	// per bucket the cap is reached exactly at four hours.
+	maxSeriesBuckets = 48
+)
+
+// seriesStep returns the trend bucket width in minutes for a window of
+// usageMinutes. A window that fits maxSeriesBuckets five-minute buckets keeps
+// them; a wider one uses the smallest whole number of minutes that keeps the
+// bar count at or below the cap, so 12 hours becomes 15-minute bars and 24
+// hours 30-minute bars.
+func seriesStep(usageMinutes int64) int64 {
+	if usageMinutes <= maxSeriesBuckets*seriesStepMinutes {
+		return seriesStepMinutes
+	}
+	return (usageMinutes + maxSeriesBuckets - 1) / maxSeriesBuckets
+}
+
 // Metrics aggregates request, token usage and upstream attempt statistics for
-// the WebUI monitor: totals since start plus a per-minute view of the last
-// hour. The request counters are atomic; mu guards everything else.
+// the WebUI monitor: totals since start plus a per-minute view of the usage
+// window. The request counters are atomic; mu guards everything else.
 type Metrics struct {
 	started         time.Time
 	active          atomic.Int64
@@ -284,7 +319,7 @@ type Metrics struct {
 	success         atomic.Uint64
 	errors          atomic.Uint64
 	mu              sync.Mutex
-	buckets         [60]metricBucket
+	buckets         [usageWindowMinutes]metricBucket
 	lifetimeUsage   UsagePeriod
 	sessionSeen     map[string]int64
 	attemptLifetime AttemptAggregate
@@ -329,7 +364,7 @@ func (m *Metrics) Record(endpoint string, status int, duration time.Duration, me
 	}
 	minute := time.Now().Unix() / 60
 	m.mu.Lock()
-	bucket := &m.buckets[minute%60]
+	bucket := &m.buckets[minute%usageWindowMinutes]
 	if bucket.minute != minute {
 		bucket.reset(minute)
 	}
@@ -448,22 +483,25 @@ func (m *Metrics) RecordAttempt(attempt UpstreamAttempt) {
 }
 
 // MonitorSnapshot is the WebUI monitor view of Metrics. Lifetime covers the
-// time since start and Window the last hour, which Series breaks down per
-// minute; the per-endpoint, model, tier and status counts cover the last hour.
+// time since start; Window and the per-endpoint, model, tier and status counts
+// cover the last hour. Series breaks the requested usage window into
+// SeriesStepMinutes points.
 type MonitorSnapshot struct {
-	StartedAt     time.Time         `json:"started_at"`
-	UptimeSeconds int64             `json:"uptime_seconds"`
-	Active        int64             `json:"active_requests"`
-	ActiveStreams int64             `json:"active_streams"`
-	Lifetime      MetricSummary     `json:"lifetime"`
-	Window        MetricSummary     `json:"last_hour"`
-	Series        []MetricSeries    `json:"series"`
-	Endpoints     map[string]uint64 `json:"endpoints"`
-	Models        map[string]uint64 `json:"models"`
-	Tiers         map[string]uint64 `json:"tiers"`
-	Statuses      map[string]uint64 `json:"statuses"`
-	Usage         UsageSnapshot     `json:"usage"`
-	Upstream      UpstreamSnapshot  `json:"upstream"`
+	StartedAt         time.Time         `json:"started_at"`
+	UptimeSeconds     int64             `json:"uptime_seconds"`
+	Active            int64             `json:"active_requests"`
+	ActiveStreams     int64             `json:"active_streams"`
+	Lifetime          MetricSummary     `json:"lifetime"`
+	Window            MetricSummary     `json:"last_hour"`
+	Series            []MetricSeries    `json:"series"`
+	SeriesStepMinutes int               `json:"series_step_minutes"`
+	UsageHours        int               `json:"usage_hours"`
+	Endpoints         map[string]uint64 `json:"endpoints"`
+	Models            map[string]uint64 `json:"models"`
+	Tiers             map[string]uint64 `json:"tiers"`
+	Statuses          map[string]uint64 `json:"statuses"`
+	Usage             UsageSnapshot     `json:"usage"`
+	Upstream          UpstreamSnapshot  `json:"upstream"`
 }
 
 // MetricSummary counts requests by result. The latency fields are filled only
@@ -480,7 +518,8 @@ type MetricSummary struct {
 	P99MS       uint64  `json:"p99_ms,omitempty"`
 }
 
-// MetricSeries is one minute of the last-hour series.
+// MetricSeries is one trend step of the usage series; Minute is the start of
+// the step.
 type MetricSeries struct {
 	Minute          time.Time `json:"minute"`
 	Total           uint64    `json:"total"`
@@ -504,9 +543,9 @@ func (m *Metrics) ServerKeyUsage() (lifetime, window map[string]ServerKeyUsage) 
 	for key, value := range m.lifetimeUsage.ServerKeys {
 		lifetime[key] = value
 	}
-	for offset := int64(0); offset < 60; offset++ {
+	for offset := int64(0); offset < summaryWindowMinutes; offset++ {
 		minute := nowMinute - offset
-		if bucket := &m.buckets[minute%60]; bucket.minute == minute {
+		if bucket := &m.buckets[minute%usageWindowMinutes]; bucket.minute == minute {
 			for key, value := range bucket.usageKeys {
 				addServerKeyUsage(window, key, value)
 			}
@@ -515,28 +554,38 @@ func (m *Metrics) ServerKeyUsage() (lifetime, window map[string]ServerKeyUsage) 
 	return lifetime, window
 }
 
-// Snapshot builds the monitor view. It also prunes recent requests and
-// attempts older than an hour.
-func (m *Metrics) Snapshot() MonitorSnapshot {
+// UsageWindowHours clamps a requested Usage tab window to the supported range.
+func UsageWindowHours(hours int) int {
+	if hours < MinUsageWindowHours {
+		return MinUsageWindowHours
+	}
+	if hours > MaxUsageWindowHours {
+		return MaxUsageWindowHours
+	}
+	return hours
+}
+
+// Snapshot builds the monitor view for the requested usage window in hours. It
+// also prunes recent requests and attempts older than an hour.
+func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
+	usageHours = UsageWindowHours(usageHours)
+	usageMinutes := int64(usageHours) * 60
 	nowMinute := time.Now().Unix() / 60
 	window := MetricSummary{}
 	var histogram [11]uint64
 	endpoints, models, tiers, statuses := map[string]uint64{}, map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
-	series := make([]MetricSeries, 0, 60)
 	usageWindow := usagePeriod()
 	upstreamWindow := attemptAggregate()
+	step := seriesStep(usageMinutes)
+	series := make([]MetricSeries, 0, int((usageMinutes+step-1)/step))
 	var recentRequests []UpstreamRequest
 	var recentAttempts []UpstreamAttempt
 	m.mu.Lock()
-	for offset := int64(59); offset >= 0; offset-- {
+	// The request summary and its breakdowns keep the last hour.
+	for offset := int64(summaryWindowMinutes - 1); offset >= 0; offset-- {
 		minute := nowMinute - offset
-		bucket := &m.buckets[minute%60]
-		entry := MetricSeries{Minute: time.Unix(minute*60, 0).UTC()}
+		bucket := &m.buckets[minute%usageWindowMinutes]
 		if bucket.minute == minute {
-			entry.Total, entry.Success, entry.Errors = bucket.total, bucket.success, bucket.errors
-			entry.InputTokens, entry.OutputTokens = bucket.tokens.Input, bucket.tokens.Output
-			entry.CachedTokens, entry.ReasoningTokens, entry.TotalTokens = bucket.tokens.Cached, bucket.tokens.Reasoning, bucket.tokens.Total
-			entry.UsageReported = bucket.usageReported
 			window.Total += bucket.total
 			window.Success += bucket.success
 			window.Errors += bucket.errors
@@ -548,6 +597,31 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 			mergeCounts(models, bucket.models)
 			mergeCounts(tiers, bucket.tiers)
 			mergeCounts(statuses, bucket.statuses)
+		}
+		attemptBucket := &m.attemptBuckets[minute%60]
+		if attemptBucket.minute == minute {
+			mergeAttemptAggregate(&upstreamWindow, attemptBucket.aggregate)
+		}
+	}
+	// Token usage and its trend cover the requested usage window, grouped into
+	// step-sized buckets so a long window stays readable.
+	for offset := usageMinutes - 1; offset >= 0; offset -= step {
+		entry := MetricSeries{Minute: time.Unix((nowMinute-offset)*60, 0).UTC()}
+		for i := int64(0); i < step; i++ {
+			minute := nowMinute - offset + i
+			bucket := &m.buckets[minute%usageWindowMinutes]
+			if bucket.minute != minute {
+				continue
+			}
+			entry.Total += bucket.total
+			entry.Success += bucket.success
+			entry.Errors += bucket.errors
+			entry.InputTokens += bucket.tokens.Input
+			entry.OutputTokens += bucket.tokens.Output
+			entry.CachedTokens += bucket.tokens.Cached
+			entry.ReasoningTokens += bucket.tokens.Reasoning
+			entry.TotalTokens += bucket.tokens.Total
+			entry.UsageReported += bucket.usageReported
 			usageWindow.Requests += bucket.usageRequests
 			usageWindow.Reported += bucket.usageReported
 			addTokenCounts(&usageWindow.Tokens, bucket.tokens)
@@ -557,10 +631,6 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 			for key, value := range bucket.usageKeys {
 				addServerKeyUsage(usageWindow.ServerKeys, key, value)
 			}
-		}
-		attemptBucket := &m.attemptBuckets[minute%60]
-		if attemptBucket.minute == minute {
-			mergeAttemptAggregate(&upstreamWindow, attemptBucket.aggregate)
 		}
 		series = append(series, entry)
 	}
@@ -589,7 +659,7 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 	}
 	return MonitorSnapshot{
 		StartedAt: m.started, UptimeSeconds: int64(time.Since(m.started).Seconds()), Active: m.active.Load(),
-		ActiveStreams: m.activeStreams.Load(), Lifetime: lifetime, Window: window, Series: series,
+		ActiveStreams: m.activeStreams.Load(), Lifetime: lifetime, Window: window, Series: series, SeriesStepMinutes: int(step), UsageHours: usageHours,
 		Endpoints: endpoints, Models: models, Tiers: tiers, Statuses: statuses,
 		Usage:    UsageSnapshot{Lifetime: usageLifetime, Window: usageWindow},
 		Upstream: UpstreamSnapshot{Lifetime: upstreamLifetime, Window: upstreamWindow, Requests: recentRequests, Recent: recentAttempts},

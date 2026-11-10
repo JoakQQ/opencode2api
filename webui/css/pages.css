@@ -130,6 +130,27 @@
   height: 200px;
   padding-top: var(--sp-4);
   border-bottom: 1px solid var(--border-2);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.usage-window {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.usage-window input[type="range"] {
+  width: 120px;
+  accent-color: var(--text-2);
+}
+
+.usage-window output {
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
 }
 
 .trend-bar {
