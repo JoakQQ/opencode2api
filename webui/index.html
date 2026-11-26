@@ -224,6 +224,7 @@
                   </label>
                 </div>
                 <div id="usage-trend" class="trend"></div>
+                <div id="usage-trend-legend" class="trend-legend"></div>
                 <div id="usage-trend-meta" class="trend-meta"></div>
               </section>
               <div class="split">
@@ -273,7 +274,7 @@
                 <form id="play-form" class="section">
                   <div class="section-head">
                     <div>
-                      <h2 class="section-title" data-i18n="playground.title">三协议请求台</h2>
+                      <h2 class="section-title" data-i18n="playground.title">多协议请求台</h2>
                       <p class="section-caption" data-i18n="playground.caption">服务端强制非流式，并经由真实 Gateway 路由。</p>
                     </div>
                   </div>
@@ -284,6 +285,7 @@
                         <option value="chat">Chat Completions</option>
                         <option value="responses">Responses</option>
                         <option value="anthropic">Anthropic Messages</option>
+                        <option value="embeddings">Embeddings</option>
                       </select>
                     </div>
                     <div class="field">
@@ -363,6 +365,7 @@
                         <th data-i18n="diagnostics.col.time">时间</th>
                         <th>Request ID</th>
                         <th data-i18n="diagnostics.col.model">模型</th>
+                        <th data-i18n="diagnostics.col.protocol">协议</th>
                         <th data-i18n="diagnostics.col.tier">Tier</th>
                         <th data-i18n="diagnostics.col.channel">通道</th>
                         <th data-i18n="diagnostics.col.tail">Key 尾码</th>
@@ -684,7 +687,7 @@
                       <span id="quota-model-count" class="section-caption"></span>
                     </h2>
                     <p class="section-caption" data-i18n="quotas.catalog.caption">
-                      模型名称可直接填入 OPENAI_MODEL；额度列对应上方选定套餐。
+                      模型名称可直接填入 OPENAI_MODEL；标签为协议家族；层级列标明所属订阅；额度列只对 Go 模型生效。
                     </p>
                   </div>
                   <input
@@ -703,6 +706,8 @@
                       <tr>
                         <th data-i18n="quotas.col.model">模型名称</th>
                         <th data-i18n="quotas.col.protocol">上游协议</th>
+                        <th data-i18n="quotas.col.tags">协议家族</th>
+                        <th data-i18n="quotas.col.tier">订阅层级</th>
                         <th class="num" data-i18n="quotas.col.hour">5 小时剩余 · 共享</th>
                         <th class="num" data-i18n="quotas.col.week">本周剩余 · 共享</th>
                         <th class="num" data-i18n="quotas.col.month">本月剩余 · 共享</th>
@@ -987,6 +992,10 @@
                     <div class="field">
                       <label for="c-up-go">Go URL</label>
                       <input id="c-up-go" />
+                    </div>
+                    <div class="field">
+                      <label for="c-up-embeddings" data-i18n="config.upstream.embeddings">Go Embeddings URL</label>
+                      <input id="c-up-embeddings" />
                     </div>
                     <div class="field">
                       <label for="c-attempts" data-i18n="config.upstream.attempts">每个 Key Tier 最大尝试次数</label>

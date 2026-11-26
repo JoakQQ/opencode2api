@@ -15,7 +15,8 @@
   "upstream": {
     "zen": "https://opencode.ai/zen",
     "go": "https://opencode.ai/zen/go",
-    "anonymous": "https://opencode.ai/inference"
+    "anonymous": "https://opencode.ai/inference",
+    "go_embeddings": "https://opencode.ai/inference/go/openai/v1"
   },
   "retry": {
     "max_attempts": 3,

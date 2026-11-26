@@ -113,18 +113,40 @@ function render() {
       el("td", { class: "mono", text: model.id }),
       el("td", {
         text:
-          { chat: "Chat Completions", responses: "Responses", anthropic: "Messages" }[model.protocol] ||
-          model.protocol,
+          { chat: "Chat Completions", responses: "Responses", anthropic: "Messages", systemone: "System One", embeddings: "Embeddings" }[
+            model.protocol
+          ] ||
+          model.protocol ||
+          "—",
       }),
+      el(
+        "td",
+        {},
+        (model.tags || []).map((tag) => el("span", { class: "chip", text: tag })),
+      ),
+      // Only the tiers that advertise the model: a Go-plan model and a free
+      // anonymous-lane model are different kinds of availability.
+      el(
+        "td",
+        {},
+        [
+          ...(model.available_go ? [el("span", { class: "chip", text: "go" })] : []),
+          ...(model.available_zen ? [el("span", { class: "chip", text: "zen" })] : []),
+        ],
+      ),
     ]);
     for (const [id] of windows()) {
       const item = account?.windows?.[id];
+      // Only Go models draw on the shared subscription, so a Zen-only model
+      // shows no quota instead of repeating the plan-wide percentage.
       row.append(
         el("td", {
           class: "num",
-          text: item
-            ? `≈ ${item.remaining_percent}%${stale ? t("（历史）", "quotas.history") : ""}`
-            : t("未知", "common.unknown"),
+          text: !model.available_go
+            ? "—"
+            : item
+              ? `≈ ${item.remaining_percent}%${stale ? t("（历史）", "quotas.history") : ""}`
+              : t("未知", "common.unknown"),
         }),
       );
     }
@@ -134,7 +156,7 @@ function render() {
   if (!models.length)
     emptyRow(
       host,
-      6,
+      8,
       allModels.length
         ? t("没有匹配的模型", "diag.noMatch")
         : t("模型目录尚未就绪，请稍后刷新", "quotas.catalogPending"),

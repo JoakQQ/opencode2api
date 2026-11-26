@@ -11,6 +11,7 @@ File thực thi đã bao gồm WebUI. Việc chạy dịch vụ không cần Nod
 ## Tính năng
 
 - Phản hồi JSON và SSE trên cả ba giao thức suy luận.
+- `/v1/embeddings` tương thích OpenAI cho các mô hình embedding của OpenCode, được chuyển tiếp nguyên văn tới endpoint embedding của upstream.
 - Văn bản, hình ảnh, suy luận, function tool, tool call và tool result; nội dung tệp ở nơi giao thức đích có thể biểu diễn.
 - Hai nhóm key Zen và Go riêng biệt, tier ưu tiên có thể cấu hình, retry và session affinity.
 - Truy cập Zen ẩn danh tuỳ chọn bằng credential `public` của OpenCode.
@@ -126,6 +127,7 @@ Gửi `Authorization: Bearer YOUR_LOCAL_API_KEY` hoặc `x-api-key: YOUR_LOCAL_A
 | POST        | `/v1/responses`         | Responses.                                                     |
 | POST        | `/v1/messages`          | Anthropic Messages.                                            |
 | POST        | `/v1/systemone`         | Quyết định có cấu trúc của System One.                        |
+| POST        | `/v1/embeddings`        | Embedding theo chuẩn OpenAI.                                   |
 | GET         | `/healthz`              | Trạng thái sẵn sàng và tóm tắt tài nguyên.                     |
 
 Hãy tìm một mô hình khả dụng trước:
@@ -180,17 +182,32 @@ System One ghép một state tự do với các câu hỏi có kiểu và trả 
 
 Để kiểm tra các mô hình và lưu ID của những mô hình gọi thành công vào `working-models.txt`, chạy `bash scripts/check-models.sh`. Script dùng `config.json` để lấy `server_keys` và sẽ hỏi xác nhận trước khi gửi request; thêm `--yes` để bỏ qua xác nhận.
 
+**Embeddings**
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EMBEDDING_MODEL_ID","input":["first document","second document"],"encoding_format":"float"}'
+```
+
+`/v1/embeddings` nói giao thức OpenAI Embeddings về phía client: `model` và `input` là bắt buộc, `input` là một chuỗi hoặc một mảng chuỗi/mảng token, còn `encoding_format`, `dimensions` và `user` được chuyển tiếp đúng như đã gửi. Body được chuyển tiếp nguyên văn — không dịch, không chia nhỏ, không cắt bớt — và JSON từ upstream (`data[].embedding` dạng float hoặc base64, `usage` và mọi trường khác) được trả về không đổi kèm status của upstream; `stream: true` bị từ chối với 400. Request chỉ đi qua gói Go: `upstream.go_embeddings` (mặc định `https://opencode.ai/inference/go/openai/v1`, nên lời gọi upstream là `…/openai/v1/embeddings`) với các key Go đã cấu hình và không có header session, và endpoint trả 503 khi chưa cấu hình `go_keys`. Danh sách `/v1/models` của gói Go khai báo mô hình nào là embedding, nên chúng xuất hiện trong `/v1/models` và trên bảng điều khiển với `"native_protocol":"embeddings"` và `"supported_endpoints":["/v1/embeddings"]`. Mô hình mà catalog biết là mô hình chat bị từ chối với 400, mô hình embedding không thuộc gói Go trả 404 (endpoint này chỉ phục vụ gói Go), còn ID mà catalog chưa từng thấy được chuyển tiếp để upstream kiểm tra.
+
+Bảng điều khiển hiển thị mô hình embedding ở mọi nơi giao thức chat xuất hiện: trang mô hình và hạn mức gắn nhãn họ giao thức cho từng mục trong danh mục (`chat`, `decision` hoặc `embeddings`), bàn thử nghiệm ở trang chẩn đoán gửi được request embedding và báo tuyến `embeddings`, bảng định tuyến ghi lại giao thức của từng request, và biểu đồ xu hướng token ở bảng vận hành xếp chồng chat với embeddings trên cùng một cột, kèm chú giải tổng của từng họ trong khung thời gian đang chọn.
+
 ### Ranh giới tương thích
 
 Request dùng giao thức gốc của upstream sẽ giữ nguyên các trường riêng của nhà cung cấp. Request đi qua nhiều giao thức sẽ đi qua một biểu diễn chung; không phải tuỳ chọn nào cũng có phần tương đương. Ví dụ, ràng buộc output JSON của Chat và `seed` không được chuyển tiếp sang Anthropic Messages. Nội dung hoặc loại tool không được hỗ trợ có thể bị từ chối.
 
-Gateway cung cấp đúng các route nêu trên. Nó không triển khai embeddings, tải tệp lên, sinh ảnh, hay truy xuất và huỷ của Responses. Nó không lưu lịch sử hội thoại; client phải tự cung cấp lịch sử hoặc dùng các tính năng được upstream thật hỗ trợ.
+Gateway cung cấp đúng các route nêu trên. Nó không triển khai tải tệp lên, sinh ảnh, hay truy xuất và huỷ của Responses. Nó không lưu lịch sử hội thoại; client phải tự cung cấp lịch sử hoặc dùng các tính năng được upstream thật hỗ trợ.
 
 ## Định tuyến và mô hình
 
 ### Phát hiện mô hình
 
-Gateway làm mới `/v1/models` của Zen/Go và [danh mục năng lực](https://models.opencode.ai/api.json) của OpenCode theo chu kỳ đã cấu hình. Giao thức gốc và giới hạn mô hình được theo dõi riêng cho từng tier. Tài liệu Zen/Go của OpenCode là nguồn dự phòng để xác định giao thức.
+Gateway làm mới `/v1/models` của Zen/Go và [danh mục năng lực](https://models.opencode.ai/api.json) của OpenCode theo chu kỳ đã cấu hình. Danh sách theo gói quyết định phạm vi khả dụng: mỗi key chỉ liệt kê các mô hình mà gói của nó dùng được, và mỗi dòng khai báo `type` — `chat`, `decision` hoặc `embedding` (các loại media như `image`, `realtime`, `video` có trong danh sách nhưng không định tuyến được). Danh mục năng lực không chứa thông tin gói và không liệt kê mô hình decision hay embedding, nên nó cung cấp giới hạn, giá và giao thức Chat/Responses/Messages cho mô hình chat, còn loại được khai báo trong danh sách quyết định phần còn lại: khai báo `decision` hoặc `embedding` là chuẩn, còn khai báo `chat` chỉ điền giao thức mà chưa nguồn nào biết, nhờ đó tuyến Messages đã ghi trong tài liệu vẫn được ưu tiên. Giao thức gốc và giới hạn mô hình được theo dõi riêng cho từng tier, và tài liệu Zen/Go của OpenCode tinh chỉnh việc phát hiện giao thức theo từng mô hình.
+
+Chỉ những mô hình mà thông tin đăng nhập đã cấu hình thực sự định tuyến được mới được công bố. Tier Go chính là danh sách key Go trả về, tier Zen là danh sách của key Zen hoặc — khi chỉ bật làn ẩn danh — tập miễn phí trong danh sách công khai, và tier không có thông tin đăng nhập nào sẽ bị xoá thay vì giữ lại kết quả của cấu hình trước. Vì vậy một triển khai chỉ có key Go với `anonymous: false` sẽ công bố đúng các mô hình của gói Go.
 
 `models.protocols` ghi đè việc phát hiện:
 
@@ -207,7 +224,7 @@ Gateway làm mới `/v1/models` của Zen/Go và [danh mục năng lực](https:
 
 Giá trị giao thức hợp lệ là `chat`, `responses` và `anthropic`. Mô hình dùng giao thức gốc không được hỗ trợ sẽ bị lọc khỏi danh sách phát hiện trừ khi được ghi đè.
 
-Chi phí, trạng thái ngừng cấp và giới hạn mô hình đến từ [endpoint metadata chính thức của OpenCode](https://models.opencode.ai/api.json), làm mới mỗi 24 giờ. Danh mục năng lực của OpenCode vẫn là nguồn chuẩn cho giới hạn context và token; các trường metadata `limit.context`, `limit.input` và `limit.output` điền cho các trường còn thiếu trong danh mục đó. `/v1/models` công khai các giới hạn này qua `context_window`/`context_length`, `max_input` và `max_output` cho các client phát hiện như CLIProxyAPI và Pi. Mỗi request metadata dùng timeout 30 giây trên HTTP client. Khi làm mới thất bại, dữ liệu cũ vẫn được giữ.
+Chi phí, trạng thái ngừng cấp và giới hạn mô hình đến từ [endpoint metadata chính thức của OpenCode](https://models.opencode.ai/api.json), làm mới mỗi 24 giờ. Metadata này không liệt kê mô hình decision và embedding, nên giá và giới hạn của chúng đến từ danh sách `/v1/models` của gói phục vụ mô hình — cùng dữ liệu mà làn ẩn danh dùng để phân biệt mô hình miễn phí với mô hình trả phí, và bảng điều khiển hiển thị là `listing_free` hoặc `listing_paid`. Danh mục năng lực của OpenCode vẫn là nguồn chuẩn cho giới hạn context và token; các trường metadata `limit.context`, `limit.input` và `limit.output` điền cho các trường còn thiếu trong danh mục đó. `/v1/models` công khai các giới hạn này qua `context_window`/`context_length`, `max_input` và `max_output` cho các client phát hiện như CLIProxyAPI và Pi. Mỗi request metadata dùng timeout 30 giây trên HTTP client. Khi làm mới thất bại, dữ liệu cũ vẫn được giữ.
 
 Mỗi phần tử của `/v1/models` cũng mang trường `cost` (USD trên một triệu token: `input`, `output`, `cache_read`, `cache_write`, cùng `cacheRead`/`cacheWrite` của OpenClaw) khi metadata nêu giá. Mô hình có suy luận liệt kê các bậc của chúng trong `reasoning_efforts` và trong `compat.supportedReasoningEfforts` của OpenClaw: từ `minimal` đến `max`, bị chặn ở trần đã dò khi bậc của mô hình là `auto`. Bậc bị ép hoặc được dò sẽ được báo là `default_reasoning_effort`. Giá cache hiển thị sau lần làm mới metadata kế tiếp.
 
@@ -301,6 +318,7 @@ Xem [config.example.json](config.example.json) để có một cấu hình khở
 | `prefer`                   | `go`; nhận `go` hoặc `zen`.                                      |
 | `upstream.zen`             | `https://opencode.ai/zen`.                                       |
 | `upstream.go`              | `https://opencode.ai/zen/go`.                                    |
+| `upstream.go_embeddings`   | `https://opencode.ai/inference/go/openai/v1`; base embedding của gói Go. `/v1/embeddings` chỉ nối thêm `/embeddings`, nên base đã kết thúc bằng `/v1` được dùng nguyên trạng. |
 | `upstream.anonymous`       | `https://opencode.ai/inference`; kênh ẩn danh thử trước, dự phòng về `/zen`. |
 | `proxies`                  | Rơi về `["direct"]` khi cả hai nguồn proxy đều rỗng.              |
 | `proxyfile`                | Không bắt buộc; đường dẫn tương đối được phân giải cạnh file cấu hình. |

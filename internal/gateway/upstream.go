@@ -697,7 +697,9 @@ func (g *Gateway) inferenceClient(proxy *proxyTransport, baseURL, model string) 
 // traffic, so they are forwarded verbatim, as is a body that is not a JSON
 // object.
 func prepareAnonymousBody(body []byte, protocol wire.Protocol, v1 bool) ([]byte, *wire.ToolRenames) {
-	if protocol == wire.SystemOne {
+	if protocol == wire.SystemOne || protocol == wire.Embeddings {
+		// A decision payload and an embedding request are not agent traffic:
+		// shaping either into a chat body would describe a different request.
 		return body, nil
 	}
 	var payload map[string]any

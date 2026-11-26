@@ -257,6 +257,18 @@ textarea {
   color: var(--bad);
 }
 
+.sup-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -529,7 +541,6 @@ progress::-moz-progress-bar {
   display: flex;
   gap: var(--sp-1);
   border-bottom: 1px solid var(--border-1);
-  overflow-x: auto;
 }
 
 .tab {

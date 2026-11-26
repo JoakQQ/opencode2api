@@ -154,14 +154,79 @@
 }
 
 .trend-bar {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
   min-width: 2px;
   border-radius: 2px 2px 0 0;
-  background: var(--text-3);
+  overflow: hidden;
 }
 
-.trend-bar:hover {
-  background: var(--text-1);
+.trend-seg {
+  width: 100%;
+  min-height: 1px;
+}
+
+/* A thin separation keeps adjacent families readable without a gap that would
+   distort the total height. */
+.trend-seg + .trend-seg {
+  box-shadow: 0 1px 0 0 var(--surface);
+}
+
+.trend-seg-chat {
+  background: var(--bg-chat);
+}
+
+.trend-seg-embeddings {
+  background: var(--bg-embeddings);
+}
+
+.trend-seg-decision {
+  background: var(--bg-decision);
+}
+
+.trend-seg-none {
+  height: 100%;
+  background: var(--border-2);
+}
+
+.trend-bar:hover .trend-seg-chat, .trend-bar:hover .trend-seg-embeddings, .trend-bar:hover .trend-seg-decision {
+  filter: brightness(1.2);
+}
+
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.trend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.trend-swatch-chat {
+  background: var(--bg-chat);
+}
+
+.trend-swatch-embeddings {
+  background: var(--bg-embeddings);
+}
+
+.trend-swatch-decision {
+  background: var(--bg-decision);
 }
 
 .trend-meta {
@@ -199,6 +264,12 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
+}
+
+/* A model row can carry several chips (protocol family, then tier); keep them
+   apart without the vertical margins of the standalone .chips list. */
+.table td .chip + .chip {
+  margin-left: var(--sp-1);
 }
 
 .quota-grid {

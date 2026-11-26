@@ -119,6 +119,13 @@ func (w *WarpConfig) Normalize() error {
 	return nil
 }
 
+// DefaultGoEmbeddingsURL is the Go plan's embedding base: the /inference
+// gateway's Go family, already versioned, so /v1/embeddings appends only
+// /embeddings. The Console embeddings route
+// (https://opencode.ai/inference/openai/v1/embeddings) is a different,
+// non-Go endpoint.
+const DefaultGoEmbeddingsURL = "https://opencode.ai/inference/go/openai/v1"
+
 // UpstreamConfig holds the base URLs of the OpenCode origins. The gateway
 // picks the request shape from the base URL (models.IsV1Upstream): one ending
 // in /zen is the v1 lane, any other a v2 lane.
@@ -136,6 +143,14 @@ type UpstreamConfig struct {
 	// free models and its call site is commented out. Empty means
 	// https://opencode.ai/inference.
 	Anonymous string `json:"anonymous"`
+	// GoEmbeddings is the base URL of the Go plan's embedding endpoint. Its
+	// default, https://opencode.ai/inference/go/openai/v1, already carries the
+	// provider-family and version segments, so /v1/embeddings only appends
+	// /embeddings. It is deliberately separate from Go: the Go chat lane
+	// (/zen/go) does not serve embeddings, and the Console endpoint
+	// https://opencode.ai/inference/openai/v1/embeddings is a different,
+	// non-Go route. Empty means the default.
+	GoEmbeddings string `json:"go_embeddings"`
 }
 
 // RetryConfig bounds the upstream retries. MaxAttempts caps the attempts of a
@@ -312,7 +327,7 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		Listen:      "127.0.0.1:8080",
 		Warp:        WarpConfig{PoolSize: 2, Stack: string(warp.DefaultStack)},
-		Upstream:    UpstreamConfig{Zen: "https://opencode.ai/zen", Go: "https://opencode.ai/zen/go", Anonymous: "https://opencode.ai/inference"},
+		Upstream:    UpstreamConfig{Zen: "https://opencode.ai/zen", Go: "https://opencode.ai/zen/go", Anonymous: "https://opencode.ai/inference", GoEmbeddings: DefaultGoEmbeddingsURL},
 		Retry:       RetryConfig{MaxAttempts: 3, TimeoutSeconds: 300},
 		Models:      ModelsConfig{RefreshSeconds: 300, Protocols: map[string]string{}},
 		Performance: PerformanceConfig{MaxIdleConns: 2048, MaxIdleConnsPerHost: 256, MaxConnsPerHost: 0, IdleConnTimeoutSeconds: 120, ConnectTimeoutSeconds: 5, FailureCooldownSeconds: 15},
@@ -367,7 +382,11 @@ func Normalize(path string, cfg Config) (Config, error) {
 	if cfg.Upstream.Anonymous == "" {
 		cfg.Upstream.Anonymous = "https://opencode.ai/inference"
 	}
-	for name, raw := range map[string]string{"upstream.zen": cfg.Upstream.Zen, "upstream.go": cfg.Upstream.Go, "upstream.anonymous": cfg.Upstream.Anonymous} {
+	cfg.Upstream.GoEmbeddings = strings.TrimSpace(cfg.Upstream.GoEmbeddings)
+	if cfg.Upstream.GoEmbeddings == "" {
+		cfg.Upstream.GoEmbeddings = DefaultGoEmbeddingsURL
+	}
+	for name, raw := range map[string]string{"upstream.zen": cfg.Upstream.Zen, "upstream.go": cfg.Upstream.Go, "upstream.anonymous": cfg.Upstream.Anonymous, "upstream.go_embeddings": cfg.Upstream.GoEmbeddings} {
 		u, err := url.Parse(strings.TrimSpace(raw))
 		if err != nil || u.Host == "" || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
 			return Config{}, fmt.Errorf("%s must be an http or https URL", name)

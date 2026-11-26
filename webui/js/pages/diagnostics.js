@@ -37,7 +37,28 @@ function playgroundTemplate() {
       max_tokens: 512,
       messages: [{ role: "user", content: prompt }],
     };
+  if (protocol === "embeddings")
+    return {
+      model,
+      input: [t("OpenCode Go 的嵌入模型把这段文字转成向量。", "playground.sampleEmbedding")],
+    };
   return { model, messages: [{ role: "user", content: prompt }] };
+}
+
+// protocolKind names the family a Playground protocol belongs to, using the
+// same names the models page tags: an embeddings request must pick an
+// embedding model, and a message request must skip one.
+function protocolKind(protocol) {
+  if (protocol === "embeddings") return "embeddings";
+  if (protocol === "systemone") return "decision";
+  return "chat";
+}
+
+// modelKinds lists the families a catalog route serves, so the model picker
+// only offers models the chosen entry protocol can carry.
+function modelKinds(item) {
+  const protocols = [item.native_protocol, ...Object.values(item.native_protocols || {})].filter(Boolean);
+  return new Set(protocols.map(protocolKind));
 }
 
 function resetTemplate() {
@@ -94,8 +115,15 @@ function renderRelays() {
 function renderModels() {
   const select = $("#play-model");
   const selected = select.value;
+  const kind = protocolKind($("#play-protocol").value);
+  const all = store.get("debug")?.models || [];
+  const matching = all.filter((item) => modelKinds(item).has(kind));
+  // The picker prefers models the chosen protocol can carry. When the catalog
+  // has no such model — or reports no protocols yet — every model stays
+  // selectable, because the request body is editable anyway.
+  const models = matching.length ? matching : all;
   select.replaceChildren();
-  (store.get("debug")?.models || []).forEach((item) => {
+  models.forEach((item) => {
     select.append(el("option", { value: item.model, text: item.model }));
   });
   if (selected && [...select.options].some((option) => option.value === selected)) select.value = selected;
@@ -220,6 +248,7 @@ function renderRequests() {
         el("td", { class: "mono", text: timeOnly(request.time) }),
         el("td", { class: "mono", text: request.request_id }),
         el("td", { text: request.model }),
+        el("td", { class: "mono", text: request.protocol || "—" }),
         el("td", { text: request.tier || "—" }),
         el("td", { text: request.channel }),
         el("td", { text: request.key_id || "—" }),
@@ -229,7 +258,7 @@ function renderRequests() {
       ]),
     );
   });
-  if (!host.children.length) emptyRow(host, 9, t("尚无请求路由", "diag.noRequests"));
+  if (!host.children.length) emptyRow(host, 10, t("尚无请求路由", "diag.noRequests"));
 }
 
 function renderAttempts() {
@@ -279,6 +308,14 @@ function renderMetadata() {
   ]);
 }
 
+// kindChip labels a route with the protocol family it serves, so the routing
+// table shows embeddings and decision models next to chat models without
+// reading the protocol column.
+function kindChip(protocol) {
+  if (!protocol) return null;
+  return el("sup", { class: "sup-chip", text: protocolKind(protocol) });
+}
+
 function renderRouteModels() {
   const debug = store.get("debug");
   const host = $("#diagnostic-models");
@@ -290,9 +327,10 @@ function renderRouteModels() {
     .forEach((item) => {
       const eligibility = item.anonymous_eligibility || {};
       const plan = [...(item.anonymous ? ["anonymous"] : []), ...(item.key_tiers || [])];
+      const chip = kindChip(item.native_protocol);
       host.append(
         el("tr", {}, [
-          el("td", { class: "mono", text: item.model }),
+          el("td", { class: "mono" }, [el("span", { class: "mr-1", text: item.model }), ...(chip ? [chip] : [])]),
           el("td", { text: `${item.native_protocol} · ${item.protocol_source}` }),
           el("td", {
             class: item.route_error ? "bad" : "",
@@ -348,7 +386,10 @@ export default {
       if (id === "route") renderRoute();
     });
     logstream.bind();
-    $("#play-protocol").addEventListener("change", resetTemplate);
+    $("#play-protocol").addEventListener("change", () => {
+      renderModels();
+      resetTemplate();
+    });
     $("#play-model").addEventListener("change", () => {
       try {
         const request = JSON.parse($("#play-request").value);

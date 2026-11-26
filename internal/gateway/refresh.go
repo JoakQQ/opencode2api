@@ -170,13 +170,14 @@ func (g *Gateway) RefreshCatalog(ctx context.Context) {
 		return
 	}
 	defer g.refreshMu.Unlock()
-	var zen, goModels []string
+	var zen, goModels []modelcatalog.ModelEntry
+	var anonymousZen bool
 	var capabilities modelcatalog.Capabilities
 	var capabilitiesErr error
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); zen = g.refreshZen(ctx) }()
-	go func() { defer wg.Done(); goModels = g.refreshTier(ctx, g.cfg.Upstream.Go, g.goNodes) }()
+	go func() { defer wg.Done(); zen, anonymousZen = g.refreshZen(ctx) }()
+	go func() { defer wg.Done(); goModels = g.refreshGo(ctx) }()
 	go func() {
 		defer wg.Done()
 		capabilityCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -189,6 +190,12 @@ func (g *Gateway) RefreshCatalog(ctx context.Context) {
 	}
 	if capabilitiesErr != nil {
 		g.logger.Warn("OpenCode capability catalog refresh failed", "component", "models", "event", "capability_refresh_failed", "error", capabilitiesErr)
+	}
+	// The plan's listing prices the decision and embedding models the metadata
+	// endpoint omits, so record them before the anonymous listing is narrowed.
+	g.catalog.ObserveListingPrices(zen, goModels)
+	if anonymousZen && zen != nil {
+		zen = g.anonymousModels(zen)
 	}
 	if zen != nil || goModels != nil {
 		g.catalog.ReplaceWithCapabilities(zen, goModels, capabilities.Protocols, capabilities.Unsupported, capabilities.Metadata)
@@ -251,21 +258,68 @@ func (g *Gateway) refreshProtocolCapabilities(ctx context.Context) (modelcatalog
 }
 
 // refreshZen lists the Zen models with the Zen keys and, when that fails and
-// the anonymous tier is enabled, with the public credential instead.
-func (g *Gateway) refreshZen(ctx context.Context) []string {
+// the anonymous tier is enabled, with the public credential instead. It also
+// reports whether the listing came from the anonymous lane, whose public
+// listing needs narrowing to the models that credential may serve. Without any
+// Zen credential the tier cannot serve anything, so the listing is cleared
+// instead of keeping models an earlier configuration discovered.
+func (g *Gateway) refreshZen(ctx context.Context) ([]modelcatalog.ModelEntry, bool) {
+	if g.zenNodes.Len() == 0 && !g.cfg.Anonymous {
+		g.logger.Debug("no zen credential is configured; clearing the zen model tier", "component", "models", "event", "zen_catalog_cleared")
+		return []modelcatalog.ModelEntry{}, false
+	}
 	if models := g.refreshTier(ctx, g.cfg.Upstream.Zen, g.zenNodes); models != nil {
-		return models
+		return models, false
 	}
 	if !g.cfg.Anonymous {
-		return nil
+		return nil, false
 	}
-	return g.refreshAnonymousTier(ctx, g.cfg.Upstream.Anonymous)
+	return g.refreshAnonymousTier(ctx, g.cfg.Upstream.Anonymous), true
+}
+
+// refreshGo lists the Go models with the Go keys. Without any Go key the tier
+// cannot serve anything, so the listing is cleared instead of keeping models an
+// earlier configuration discovered.
+func (g *Gateway) refreshGo(ctx context.Context) []modelcatalog.ModelEntry {
+	if g.goNodes.Len() == 0 {
+		g.logger.Debug("no go key is configured; clearing the go model tier", "component", "models", "event", "go_catalog_cleared")
+		return []modelcatalog.ModelEntry{}
+	}
+	return g.refreshTier(ctx, g.cfg.Upstream.Go, g.goNodes)
+}
+
+// anonymousModels narrows a public Zen listing to the models the anonymous lane
+// can actually serve. That listing is the whole Zen catalog, including paid
+// models the public credential is not entitled to, so without this filter the
+// catalog advertises models that never had a route. The listing's own prices
+// have already been recorded by the caller, so a model the metadata endpoint
+// omits is judged on the price its plan publishes. While no price data exists at
+// all the listing is kept as it is and the next refresh narrows it.
+func (g *Gateway) anonymousModels(entries []modelcatalog.ModelEntry) []modelcatalog.ModelEntry {
+	if len(entries) == 0 || !g.catalog.MetadataSnapshot().Ready {
+		return entries
+	}
+	servable := make([]modelcatalog.ModelEntry, 0, len(entries))
+	for _, entry := range entries {
+		if g.catalog.IsFreeModel(entry.ID) {
+			servable = append(servable, entry)
+		}
+	}
+	if len(servable) == 0 {
+		// Every listed model looked paid, which almost certainly means the price
+		// metadata is wrong. Keep the listing and let per-request eligibility
+		// decide rather than advertising an empty tier.
+		g.logger.Warn("anonymous listing has no free model; keeping it unfiltered", "component", "models", "event", "anonymous_catalog_unfiltered", "models", len(entries))
+		return entries
+	}
+	g.logger.Debug("anonymous catalog narrowed to free models", "component", "models", "event", "anonymous_catalog_filtered", "models", len(servable), "listed", len(entries))
+	return servable
 }
 
 // refreshAnonymousTier lists models with the public credential, one anonymous
 // node per attempt: one pass over the nodes, or up to retry.max_attempts
 // attempts when #pool transports exist. base only labels the logs.
-func (g *Gateway) refreshAnonymousTier(ctx context.Context, base string) []string {
+func (g *Gateway) refreshAnonymousTier(ctx context.Context, base string) []modelcatalog.ModelEntry {
 	if !g.anonymous.AllowAttempt() {
 		// The breaker is open, or its half-open probe is already running:
 		// refreshing now would only add to the block. Keeping nil leaves the
@@ -288,7 +342,7 @@ func (g *Gateway) refreshAnonymousTier(ctx context.Context, base string) []strin
 			break
 		}
 		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		var models []string
+		var models []modelcatalog.ModelEntry
 		var status int
 		var err error
 		// List models on the configured v2 /inference origin; the v1 fallback
@@ -317,7 +371,7 @@ func (g *Gateway) refreshAnonymousTier(ctx context.Context, base string) []strin
 // proxy. The catalog is what makes free models discoverable at all, so with
 // the WARP switch on it must not depend on a working proxy pool. One lease per
 // attempt; the pool learns about a blocked exit through Report.
-func (g *Gateway) refreshAnonymousWARP(ctx context.Context, base string) []string {
+func (g *Gateway) refreshAnonymousWARP(ctx context.Context, base string) []modelcatalog.ModelEntry {
 	limit := max(g.cfg.Retry.MaxAttempts, 1)
 	for attempt := 1; attempt <= limit; attempt++ {
 		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -337,7 +391,7 @@ func (g *Gateway) refreshAnonymousWARP(ctx context.Context, base string) []strin
 			return nil
 		}
 		egress := "warp:" + lease.EgressKey()
-		var listed []string
+		var listed []modelcatalog.ModelEntry
 		var status int
 		for _, upstream := range g.anonymousUpstreams() {
 			listed, status, err = modelcatalog.FetchModels(refreshCtx, owned.regular, upstream, anonymousZenKey)
@@ -363,7 +417,7 @@ func (g *Gateway) refreshAnonymousWARP(ctx context.Context, base string) []strin
 // refreshTier lists the models at base with up to retry.max_attempts keys
 // from nodes, updating proxy health and key cooldowns after every attempt. It
 // returns nil when the pool has no keys or every attempt fails.
-func (g *Gateway) refreshTier(ctx context.Context, base string, nodes *upstreamNodes) []string {
+func (g *Gateway) refreshTier(ctx context.Context, base string, nodes *upstreamNodes) []modelcatalog.ModelEntry {
 	cursor := nodes.Cursor()
 	for attempt := 0; attempt < g.cfg.Retry.MaxAttempts; attempt++ {
 		node := cursor.Next()

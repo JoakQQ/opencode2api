@@ -6,7 +6,11 @@ This guide covers how the management pages are used, configured, and how they re
 
 Management page: `/#model-quotas`. Once signed in it reads `GET /api/model-quotas`.
 
-- Models come from the OpenCode Go catalogue the gateway syncs; the page supports searching for and copying model IDs.
+- Models come from the OpenCode catalogue the gateway syncs, not only the Go tier: the page lists every catalog entry with its upstream protocol and a protocol-family tag (`chat` for Chat/Responses/Messages, `decision` for System One, `embeddings` for the embeddings endpoint), so a model is recognizable before it is filled into `OPENAI_MODEL`. The page supports searching for and copying model IDs.
+- Only Go models draw on the shared subscription; the quota columns show `—` for a model the Go tier does not advertise.
+- Decision (`decision`) and embedding (`embedding`) models are discovered from the per-plan `/v1/models` listing, which declares a `type` on every row and is scoped to the key that fetched it. The capability catalog (`models.opencode.ai/api.json`) carries no plan information and lists neither kind, so it only refines the chat models' protocol and limits.
+- Availability is scoped to the configured credentials: the Go tier is exactly what the Go key lists, the Zen tier is what a Zen key lists or — with only the anonymous lane enabled — the free subset of the public listing, and a tier without a credential is cleared. The tier column names the plan that advertises each row.
+- Prices and limits come from the OpenCode metadata endpoint. The decision and embedding models are not listed there, so they are priced from the plan's `/v1/models` listing; the eligibility source in the routing table says `listing_free` or `listing_paid` for them instead of `metadata_model_missing`.
 - The gateway queries `https://opencode.ai/zen/go/v1/usage` with the configured Go keys. The browser never receives an upstream key.
 - The page shows the remaining percentage and reset time for the 5-hour, weekly, and monthly windows. The endpoint exposes only the shared plan windows: it provides no per-model balance and never estimates money or request counts. Quotas of several keys are not summed.
 - Successful responses are cached for 60 seconds and failures for 15 seconds; on failure the last successful reading is kept and clearly marked as historical data. With no successful reading the page shows unknown.

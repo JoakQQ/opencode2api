@@ -178,22 +178,38 @@ func (c *ModelCatalog) freeOnlyErrorLocked(model string) error {
 
 // Replace installs freshly listed model IDs and keeps the capability data.
 func (c *ModelCatalog) Replace(zen, goModels []string) {
-	c.ReplaceWithCapabilities(zen, goModels, nil, nil, nil)
+	c.ReplaceWithCapabilities(typedEntries(zen), typedEntries(goModels), nil, nil, nil)
+}
+
+// typedEntries converts bare model IDs, such as those of an older caller, into
+// listing entries whose kind is unknown.
+func typedEntries(ids []string) []ModelEntry {
+	if ids == nil {
+		return nil
+	}
+	entries := make([]ModelEntry, 0, len(ids))
+	for _, id := range ids {
+		entries = append(entries, ModelEntry{ID: id})
+	}
+	return entries
 }
 
 // ReplaceWithCapabilities installs the result of a live refresh and marks the
 // catalog fresh. A nil argument leaves that part of the state unchanged, so a
 // tier whose listing failed keeps its previous models; native and unsupported
-// are replaced per tier, metadata as a whole.
-func (c *ModelCatalog) ReplaceWithCapabilities(zen, goModels []string, native map[config.Tier]map[string]wire.Protocol, unsupported map[config.Tier]map[string]bool, metadata map[config.Tier]map[string]Metadata) {
+// are replaced per tier, metadata as a whole. The kind each listing declares is
+// folded into the protocol data, which is what makes decision and embedding
+// models routable (see mergeDeclaredLocked).
+func (c *ModelCatalog) ReplaceWithCapabilities(zen, goModels []ModelEntry, native map[config.Tier]map[string]wire.Protocol, unsupported map[config.Tier]map[string]bool, metadata map[config.Tier]map[string]Metadata) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if zen != nil {
-		c.zen = toSet(zen)
+		c.zen = entrySet(zen)
 	}
 	if goModels != nil {
-		c.goModels = toSet(goModels)
+		c.goModels = entrySet(goModels)
 	}
+	native, unsupported = c.mergeDeclaredLocked(zen, goModels, native, unsupported)
 	if native != nil {
 		for _, tier := range []config.Tier{config.TierZen, config.TierGo} {
 			if protocols, ok := native[tier]; ok {
@@ -214,6 +230,74 @@ func (c *ModelCatalog) ReplaceWithCapabilities(zen, goModels []string, native ma
 	c.updatedAt = time.Now().UTC()
 	c.cacheSource = "live"
 	c.stale = false
+}
+
+// mergeDeclaredLocked folds the protocol each listing row declares into the
+// capability data the same refresh returned. A decision or embedding
+// declaration is authoritative, because no other source reports those models:
+// the capability catalog only lists chat-capable ones. A chat declaration only
+// fills a protocol the catalog does not already know, so a documented Messages
+// route keeps winning over the generic kind. A declared model also stops being
+// marked unsupported. Tiers without declarations are left out of the result, so
+// the caller keeps their previous data. The caller holds c.mu.
+func (c *ModelCatalog) mergeDeclaredLocked(zen, goModels []ModelEntry, native map[config.Tier]map[string]wire.Protocol, unsupported map[config.Tier]map[string]bool) (map[config.Tier]map[string]wire.Protocol, map[config.Tier]map[string]bool) {
+	listings := map[config.Tier][]ModelEntry{config.TierZen: zen, config.TierGo: goModels}
+	var mergedNative map[config.Tier]map[string]wire.Protocol
+	var mergedUnsupported map[config.Tier]map[string]bool
+	for _, tier := range []config.Tier{config.TierZen, config.TierGo} {
+		declared := make(map[string]wire.Protocol, len(listings[tier]))
+		for _, entry := range listings[tier] {
+			if protocol, ok := entry.Protocol(); ok && entry.ID != "" {
+				declared[entry.ID] = protocol
+			}
+		}
+		if len(declared) == 0 {
+			continue
+		}
+		base := c.nativeProtocols[tier]
+		if native != nil {
+			if protocols, ok := native[tier]; ok {
+				base = protocols
+			}
+		}
+		protocols := cloneProtocols(base)
+		blocked := c.unsupported[tier]
+		if unsupported != nil {
+			if models, ok := unsupported[tier]; ok {
+				blocked = models
+			}
+		}
+		blockedCopy := cloneBools(blocked)
+		for model, protocol := range declared {
+			if protocol == wire.SystemOne || protocol == wire.Embeddings {
+				protocols[model] = protocol
+			} else if protocols[model] == "" {
+				protocols[model] = protocol
+			}
+			delete(blockedCopy, model)
+		}
+		if mergedNative == nil {
+			mergedNative = make(map[config.Tier]map[string]wire.Protocol, 2)
+			mergedUnsupported = make(map[config.Tier]map[string]bool, 2)
+		}
+		mergedNative[tier] = protocols
+		mergedUnsupported[tier] = blockedCopy
+	}
+	if mergedNative == nil {
+		return native, unsupported
+	}
+	return mergedNative, mergedUnsupported
+}
+
+// entrySet converts listing rows into the ID set a tier is advertised with.
+func entrySet(entries []ModelEntry) map[string]bool {
+	result := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.ID != "" {
+			result[entry.ID] = true
+		}
+	}
+	return result
 }
 
 // CopyState copies the discovered state of source (models, capabilities,
@@ -425,6 +509,22 @@ func (c *ModelCatalog) IsFreeModel(model string) bool {
 	return c.anonymousDecision(model).Allowed
 }
 
+// EmbeddingModel reports whether the catalog identifies model as an embedding
+// model. A configured override decides alone; otherwise any tier advertising
+// the Embeddings protocol counts. A model the catalog has never seen is not an
+// embedding model here: the embeddings handler accepts unknown IDs and lets
+// the upstream validate them, but a known chat model must not be sent to the
+// embedding endpoint.
+func (c *ModelCatalog) EmbeddingModel(model string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if protocol := c.protocols[model]; protocol != "" {
+		return protocol == wire.Embeddings
+	}
+	return c.nativeProtocols[config.TierZen][model] == wire.Embeddings ||
+		c.nativeProtocols[config.TierGo][model] == wire.Embeddings
+}
+
 // Diagnostic explains the protocol choice and the route of model for the given
 // credentials; requested is only echoed. It never fails: a routing error is
 // reported in RouteError.
@@ -559,6 +659,21 @@ func (c *ModelCatalog) Supported(model string) bool {
 	return c.supportedLocked(model)
 }
 
+// ObserveListingPrices records the prices this refresh's listings reported, so
+// the decision and embedding models the metadata endpoint omits still carry a
+// price and an anonymous-eligibility verdict. It is a no-op when no pricing
+// registry is attached.
+func (c *ModelCatalog) ObserveListingPrices(zen, goModels []ModelEntry) {
+	c.mu.RLock()
+	store := c.pricing
+	c.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	store.ObserveListing(zen)
+	store.ObserveListing(goModels)
+}
+
 // Known reports whether the catalog has ever heard of the model, regardless of
 // whether it can currently be served. A model that is known but not servable
 // (no tier advertises it, or the capability catalog marks it unsupported) is a
@@ -587,6 +702,22 @@ func (c *ModelCatalog) Known(model string) bool {
 		return true
 	}
 	return false
+}
+
+// Advertised reports whether tier lists model, and whether that tier's listing
+// has been fetched at all. The second result separates "this tier does not offer
+// the model" from "this tier's models are not known yet", which callers need
+// before rejecting a request the upstream could still answer.
+func (c *ModelCatalog) Advertised(model string, tier config.Tier) (listed, fetched bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	switch tier {
+	case config.TierZen:
+		return c.zen[model], len(c.zen) > 0
+	case config.TierGo:
+		return c.goModels[model], len(c.goModels) > 0
+	}
+	return false, false
 }
 
 // MetadataForTier returns the rich per-model metadata (context window,

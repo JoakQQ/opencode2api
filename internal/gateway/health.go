@@ -199,6 +199,8 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 		}
 		if route.Protocol == wire.SystemOne {
 			entry["supported_endpoints"] = []string{"/v1/systemone"}
+		} else if route.Protocol == wire.Embeddings {
+			entry["supported_endpoints"] = []string{"/v1/embeddings"}
 		} else {
 			entry["supported_endpoints"] = []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"}
 		}

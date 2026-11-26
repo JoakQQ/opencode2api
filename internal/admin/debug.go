@@ -86,7 +86,7 @@ func (a *Server) handleDebugInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !protocol.Valid(input.Protocol) {
-		writeAdminError(w, http.StatusBadRequest, "invalid_protocol", "protocol must be chat, responses, or anthropic")
+		writeAdminError(w, http.StatusBadRequest, "invalid_protocol", "protocol must be chat, responses, anthropic, systemone, or embeddings")
 		return
 	}
 	if input.Request == nil {
@@ -94,7 +94,12 @@ func (a *Server) handleDebugInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := jsonutil.CloneMap(input.Request)
-	payload["stream"] = false
+	if input.Protocol != protocol.Embeddings {
+		// An embeddings request has no streaming mode, and adding a field the
+		// endpoint does not accept would test the payload rather than the
+		// model.
+		payload["stream"] = false
+	}
 	model := jsonutil.StringAt(payload, "model")
 	if model == "" {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", "request.model is required")
@@ -112,6 +117,10 @@ func (a *Server) handleDebugInference(w http.ResponseWriter, r *http.Request) {
 		selectedKey = a.manager.DebugKey(input.Key.Tier, input.Key.ID)
 		if selectedKey == nil {
 			writeAdminError(w, http.StatusBadRequest, "unknown_key_id", "selected key is not configured")
+			return
+		}
+		if input.Protocol == protocol.Embeddings && selectedKey.Tier != config.TierGo {
+			writeAdminError(w, http.StatusBadRequest, "embeddings_require_go_key", "embeddings are served by the go tier; select a Go key")
 			return
 		}
 	}

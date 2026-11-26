@@ -2,10 +2,10 @@
 // between the OpenAI Chat Completions, OpenAI Responses and Anthropic Messages
 // protocols through a shared bridge model.
 //
-// System One is recognized but never translated: Valid accepts it, Path maps
-// it to its endpoint and WriteError gives it the OpenAI error envelope. It has
-// no bridge encoding, so a cross-protocol conversion fails, and the gateway
-// forwards its decision payloads verbatim.
+// System One and Embeddings are recognized but never translated: Valid accepts
+// them, Path maps them to their endpoint and WriteError gives them the OpenAI
+// error envelope. Neither has a bridge encoding, so a cross-protocol
+// conversion fails, and the gateway forwards their payloads verbatim.
 package protocol
 
 // Protocol names the wire protocol of a client-facing endpoint or of an
@@ -16,8 +16,8 @@ type Protocol string
 // upstream model, and each is both: the gateway serves a request in the
 // client's protocol and speaks the route's protocol upstream, converting
 // between the two when they differ. Chat is OpenAI Chat Completions, Responses
-// is OpenAI Responses, Anthropic is Anthropic Messages, and SystemOne is
-// described below.
+// is OpenAI Responses, Anthropic is Anthropic Messages, and SystemOne and
+// Embeddings are described below.
 const (
 	Chat      Protocol = "chat"
 	Responses Protocol = "responses"
@@ -27,11 +27,32 @@ const (
 	// answers, so the payload shares no shape with the message protocols the
 	// bridge converts and is forwarded as-is.
 	SystemOne Protocol = "systemone"
+	// Embeddings is the OpenAI Embeddings endpoint. Its request and response
+	// are relayed verbatim on /v1/embeddings; a message protocol has no
+	// embedding equivalent, so it is never converted.
+	Embeddings Protocol = "embeddings"
 )
 
 // Valid reports whether p is one of the protocols defined above.
 func Valid(p Protocol) bool {
-	return p == Chat || p == Responses || p == Anthropic || p == SystemOne
+	return p == Chat || p == Responses || p == Anthropic || p == SystemOne || p == Embeddings
+}
+
+// Kind groups a protocol into the family the console labels a model with: the
+// message protocols (Chat, Responses, Anthropic) are "chat", SystemOne is
+// "decision" and Embeddings is "embeddings". Any other value is returned
+// unchanged, so a protocol added later shows up under its own name instead of
+// silently joining another family.
+func Kind(p Protocol) string {
+	switch p {
+	case Chat, Responses, Anthropic:
+		return "chat"
+	case SystemOne:
+		return "decision"
+	case Embeddings:
+		return "embeddings"
+	}
+	return string(p)
 }
 
 // Path returns the endpoint path that serves a protocol, relative to an API
@@ -45,6 +66,8 @@ func Path(protocol Protocol) string {
 		return "/v1/messages"
 	case SystemOne:
 		return "/v1/systemone"
+	case Embeddings:
+		return "/v1/embeddings"
 	default:
 		return "/v1/chat/completions"
 	}

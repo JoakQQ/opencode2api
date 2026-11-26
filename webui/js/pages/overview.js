@@ -166,16 +166,68 @@ function renderSummary(monitor) {
   renderBreakdowns(metrics);
 }
 
+// trendSeries names the protocol families the trend stacks: the segment class,
+// the snapshot field that carries their tokens, the label and the help text
+// that says which protocols each family covers.
+function trendSeries() {
+  return [
+    ["chat", "chat_tokens", t("Chat", "usage.trend.legend.chat"), t("chat / responses / anthropic 协议", "usage.trend.legend.chat.help")],
+    [
+      "embeddings",
+      "embedding_tokens",
+      t("Embeddings", "usage.trend.legend.embeddings"),
+      t("embeddings 协议", "usage.trend.legend.embeddings.help"),
+    ],
+    [
+      "decision",
+      "decision_tokens",
+      t("Decision", "usage.trend.legend.decision"),
+      t("systemone 协议", "usage.trend.legend.decision.help"),
+    ],
+  ];
+}
+
+// renderTrendLegend draws the stack key and the window total of each protocol
+// family, so a stacked bar is readable without hovering.
+function renderTrendLegend() {
+  const legend = $("#usage-trend-legend");
+  if (!legend) return;
+  const protocols = store.get("monitor")?.usage?.window?.protocols || {};
+  legend.replaceChildren();
+  for (const [kind, , label, help] of trendSeries()) {
+    legend.append(
+      el("span", { class: "trend-legend-item", title: help }, [
+        el("span", { class: `trend-swatch trend-swatch-${kind}` }),
+        el("span", { text: label }),
+        el("span", { class: "num", text: formatNumber(protocols[kind]?.total_tokens || 0) }),
+      ]),
+    );
+  }
+}
+
 function renderTrend(metrics) {
   const trend = $("#usage-trend");
   const series = metrics?.series || [];
   const stepMinutes = metrics?.series_step_minutes || 5;
   const hours = currentUsageHours(store.get("monitor"));
   const maximum = Math.max(1, ...series.map((point) => point.total_tokens || 0));
+  const families = trendSeries();
   trend.replaceChildren();
   series.forEach((point, index) => {
     const bar = el("div", { class: "trend-bar" });
-    bar.style.height = `${Math.max(2, Math.round(((point.total_tokens || 0) / maximum) * 100))}%`;
+    const total = point.total_tokens || 0;
+    bar.style.height = `${Math.max(2, Math.round((total / maximum) * 100))}%`;
+    // One segment per protocol family, so chat and embedding traffic stack in
+    // the same bar instead of hiding behind one total.
+    const segments = families
+      .map(([kind, field]) => [kind, point[field] || 0])
+      .filter(([, value]) => value > 0);
+    for (const [kind, value] of segments) {
+      const segment = el("div", { class: `trend-seg trend-seg-${kind}` });
+      segment.style.height = `${(value / total) * 100}%`;
+      bar.append(segment);
+    }
+    if (!segments.length) bar.append(el("div", { class: "trend-seg trend-seg-none" }));
     // Each point starts where the previous one ended, so the tooltip shows the
     // real bucket width even when the interval is not a round number. The last
     // bucket ends at the current minute, never in the future.
@@ -184,11 +236,15 @@ function renderTrend(metrics) {
     const end = next
       ? new Date(next.minute)
       : new Date(Math.min(start.getTime() + stepMinutes * 60000, Date.now()));
-    bar.title = `${timeOnly(start)}–${timeOnly(end)} · input ${formatNumber(point.input_tokens)} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
+    const split = families.map(([, field, label]) => `${label} ${formatNumber(point[field] || 0)}`).join(" · ");
+    bar.title = `${timeOnly(start)}–${timeOnly(end)} · ${split} · input ${formatNumber(
+      point.input_tokens,
+    )} · output ${formatNumber(point.output_tokens)} · total ${formatNumber(point.total_tokens)}`;
     trend.append(bar);
   });
+  renderTrendLegend();
   $("#usage-trend-caption").textContent = t(
-    "最近 {0} 小时；悬停查看输入、输出与总量。",
+    "最近 {0} 小时；悬停查看 chat、embeddings 与总量。",
     "usage.trend.caption",
     hours,
   );
