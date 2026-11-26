@@ -30,6 +30,10 @@ type metricBucket struct {
 	usageTiers    map[string]TokenCounts
 	usageSessions map[string]TokenCounts
 	usageKeys     map[string]ServerKeyUsage
+	// usageProtocols splits the bucket's tokens by protocol family (see
+	// protocol.Kind), so the console can chart chat and embedding traffic
+	// separately.
+	usageProtocols map[string]TokenCounts
 }
 
 // reset clears the bucket for reuse by minute.
@@ -39,6 +43,7 @@ func (b *metricBucket) reset(minute int64) {
 		tiers: make(map[string]uint64), statuses: make(map[string]uint64),
 		usageModels: make(map[string]TokenCounts), usageTiers: make(map[string]TokenCounts),
 		usageSessions: make(map[string]TokenCounts), usageKeys: make(map[string]ServerKeyUsage),
+		usageProtocols: make(map[string]TokenCounts),
 	}
 }
 
@@ -68,6 +73,10 @@ type UsagePeriod struct {
 	// ServerKeys maps the local server key fingerprint (or "playground") to
 	// its share of Requests and Tokens, so the entries sum to the totals.
 	ServerKeys map[string]ServerKeyUsage `json:"server_keys"`
+	// Protocols splits Tokens by protocol family: "chat" for the Chat,
+	// Responses and Anthropic protocols, "embeddings" for /v1/embeddings and
+	// "decision" for System One. The entries sum to Tokens.
+	Protocols map[string]TokenCounts `json:"protocols"`
 }
 
 // ServerKeyUsage is the request count and token usage of one server key.
@@ -129,15 +138,18 @@ type UpstreamRequest struct {
 	ServerKeyID string    `json:"server_key_id,omitempty"`
 	Model       string    `json:"model"`
 	Tier        string    `json:"tier,omitempty"`
-	KeyID       string    `json:"key_id,omitempty"`
-	Channel     string    `json:"channel"`
-	Anonymous   bool      `json:"anonymous"`
-	Proxy       string    `json:"proxy_node,omitempty"`
-	Attempts    int       `json:"attempts"`
-	Status      int       `json:"status"`
-	DurationMS  int64     `json:"duration_ms"`
-	Success     bool      `json:"success"`
-	Outcome     string    `json:"outcome"`
+	// Protocol is the upstream protocol that served the request, so the
+	// ledger shows embedding calls apart from message calls.
+	Protocol   string `json:"protocol,omitempty"`
+	KeyID      string `json:"key_id,omitempty"`
+	Channel    string `json:"channel"`
+	Anonymous  bool   `json:"anonymous"`
+	Proxy      string `json:"proxy_node,omitempty"`
+	Attempts   int    `json:"attempts"`
+	Status     int    `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+	Success    bool   `json:"success"`
+	Outcome    string `json:"outcome"`
 }
 
 // attemptBucket holds the upstream attempts of one minute, like metricBucket.
@@ -551,14 +563,17 @@ func (m *Metrics) Record(endpoint string, status int, duration time.Duration, me
 			addTokenMap(m.lifetimeUsage.Models, meta.Model, tokens)
 			addTokenMap(m.lifetimeUsage.Tiers, meta.Tier, tokens)
 			addTokenMap(bucket.usageSessions, meta.Session, tokens)
+			addTokenMap(bucket.usageProtocols, protocol.Kind(meta.Protocol), tokens)
 			m.addLifetimeSessionLocked(meta.Session, tokens)
+			addTokenMap(m.lifetimeUsage.Protocols, protocol.Kind(meta.Protocol), tokens)
 			addServerKeyUsage(bucket.usageKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens})
 			addServerKeyUsage(m.lifetimeUsage.ServerKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens})
 		}
 		if meta.Request != "" && meta.Model != "" {
 			request := UpstreamRequest{
 				Time: time.Now().UTC(), RequestID: meta.Request, Session: meta.Session, ServerKeyID: meta.ServerKeyID, Model: meta.Model, Tier: meta.Tier,
-				KeyID: meta.KeyID, Channel: meta.Channel, Anonymous: meta.Anonymous, Proxy: meta.Proxy,
+				Protocol: string(meta.Protocol),
+				KeyID:    meta.KeyID, Channel: meta.Channel, Anonymous: meta.Anonymous, Proxy: meta.Proxy,
 				Attempts: meta.Attempts, Status: status, DurationMS: max(duration.Milliseconds(), 0),
 				Success: success,
 			}
@@ -685,6 +700,12 @@ type MetricSeries struct {
 	ReasoningTokens uint64    `json:"reasoning_tokens"`
 	TotalTokens     uint64    `json:"total_tokens"`
 	UsageReported   uint64    `json:"usage_reported"`
+	// ChatTokens, EmbeddingTokens and DecisionTokens split TotalTokens by
+	// protocol family, so the trend can stack message and embedding traffic
+	// instead of drawing one undifferentiated bar.
+	ChatTokens      uint64 `json:"chat_tokens"`
+	EmbeddingTokens uint64 `json:"embedding_tokens"`
+	DecisionTokens  uint64 `json:"decision_tokens"`
 }
 
 // ServerKeyUsage returns per-server-key usage for the lifetime and the last
@@ -759,6 +780,7 @@ func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
 	}
 	// Token usage and its trend cover the requested usage window, grouped into
 	// step-sized buckets so a long window stays readable.
+	chatKind, embeddingKind, decisionKind := protocol.Kind(protocol.Chat), protocol.Kind(protocol.Embeddings), protocol.Kind(protocol.SystemOne)
 	for offset := usageMinutes - 1; offset >= 0; offset -= step {
 		entry := MetricSeries{Minute: time.Unix((nowMinute-offset)*60, 0).UTC()}
 		for i := int64(0); i < step; i++ {
@@ -776,12 +798,16 @@ func (m *Metrics) Snapshot(usageHours int) MonitorSnapshot {
 			entry.ReasoningTokens += bucket.tokens.Reasoning
 			entry.TotalTokens += bucket.tokens.Total
 			entry.UsageReported += bucket.usageReported
+			entry.ChatTokens += bucket.usageProtocols[chatKind].Total
+			entry.EmbeddingTokens += bucket.usageProtocols[embeddingKind].Total
+			entry.DecisionTokens += bucket.usageProtocols[decisionKind].Total
 			usageWindow.Requests += bucket.usageRequests
 			usageWindow.Reported += bucket.usageReported
 			addTokenCounts(&usageWindow.Tokens, bucket.tokens)
 			mergeTokenMaps(usageWindow.Models, bucket.usageModels)
 			mergeTokenMaps(usageWindow.Tiers, bucket.usageTiers)
 			mergeTokenMaps(usageWindow.Sessions, bucket.usageSessions)
+			mergeTokenMaps(usageWindow.Protocols, bucket.usageProtocols)
 			for key, value := range bucket.usageKeys {
 				addServerKeyUsage(usageWindow.ServerKeys, key, value)
 			}
@@ -828,7 +854,10 @@ func mergeCounts(target, source map[string]uint64) {
 
 // usagePeriod returns an empty UsagePeriod with its maps allocated.
 func usagePeriod() UsagePeriod {
-	return UsagePeriod{Models: make(map[string]TokenCounts), Tiers: make(map[string]TokenCounts), Sessions: make(map[string]TokenCounts), ServerKeys: make(map[string]ServerKeyUsage)}
+	return UsagePeriod{
+		Models: make(map[string]TokenCounts), Tiers: make(map[string]TokenCounts), Sessions: make(map[string]TokenCounts),
+		ServerKeys: make(map[string]ServerKeyUsage), Protocols: make(map[string]TokenCounts),
+	}
 }
 
 func tokenCounts(usage protocol.Usage) TokenCounts {
@@ -906,6 +935,7 @@ func cloneUsagePeriod(source UsagePeriod) UsagePeriod {
 	mergeTokenMaps(result.Models, source.Models)
 	mergeTokenMaps(result.Tiers, source.Tiers)
 	mergeTokenMaps(result.Sessions, source.Sessions)
+	mergeTokenMaps(result.Protocols, source.Protocols)
 	for key, value := range source.ServerKeys {
 		addServerKeyUsage(result.ServerKeys, key, value)
 	}

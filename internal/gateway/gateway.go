@@ -167,6 +167,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/responses", g.authenticate(g.handleInference(wire.Responses)))
 	mux.HandleFunc("POST /v1/messages", g.authenticate(g.handleInference(wire.Anthropic)))
 	mux.HandleFunc("POST /v1/systemone", g.authenticate(g.handleSystemOne))
+	mux.HandleFunc("POST /v1/embeddings", g.authenticate(g.handleEmbeddings))
 	mux.HandleFunc("GET /healthz", g.handleHealth)
 	return telemetry.Recover(g.logger, mux)
 }
@@ -292,6 +293,13 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			}
 			return
 		}
+		if g.catalog.EmbeddingModel(model) {
+			// An embedding model has no message-shaped body, so it is only
+			// reachable on its own endpoint. Checked before routing so the
+			// answer is the same whether or not a key tier advertises it.
+			wire.WriteError(w, external, http.StatusBadRequest, fmt.Sprintf("model %q is an embedding model; send it to /v1/embeddings", model), "invalid_request_error", "model")
+			return
+		}
 		route, err := g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous)
 		if override, selected := debugKeyOverrideFrom(r.Context()); selected {
 			// A per-key diagnostic must not silently be served by another key,
@@ -317,6 +325,12 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 				return
 			}
 			g.forwardSystemOne(w, r, body, payload, model, route)
+			return
+		}
+		if route.Protocol == wire.Embeddings {
+			// An embedding model has no message-shaped body, so it is only
+			// reachable on its own endpoint.
+			wire.WriteError(w, external, http.StatusBadRequest, fmt.Sprintf("model %q is an embedding model; send it to /v1/embeddings", model), "invalid_request_error", "model")
 			return
 		}
 		bodies, err := g.prepareRouteBodies(external, route, payload)
@@ -348,14 +362,14 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			// A downstream disconnect is not an upstream failure: report the
 			// real cause so telemetry and clients see a cancel, not a 502.
 			if !errors.Is(err, context.DeadlineExceeded) && wire.ClientCanceled(r.Context(), err) {
-				g.logger.Debug("client canceled before upstream response", "component", "upstream", "event", "request_canceled", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous)
+				g.logger.Debug("client canceled before upstream response", "component", "upstream", "event", "request_canceled", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol))
 				if meta != nil {
 					meta.Outcome = "client_canceled"
 				}
 				wire.WriteError(w, external, statusClientClosedRequest, "client closed request", "client_canceled", ids.Request)
 				return
 			}
-			g.logger.Warn("all upstream attempts failed", "component", "upstream", "event", "request_failed", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "error", err)
+			g.logger.Warn("all upstream attempts failed", "component", "upstream", "event", "request_failed", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol), "error", err)
 			// The final attempt never reached the upstream because its proxy
 			// route failed; report that instead of blaming the upstream with
 			// a 502.
@@ -515,6 +529,10 @@ func (g *Gateway) handleSystemOne(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if g.catalog.EmbeddingModel(model) {
+		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, fmt.Sprintf("model %q is an embedding model; send it to /v1/embeddings", model), "invalid_request_error", "model")
+		return
+	}
 	route, err := g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous)
 	if err != nil {
 		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, err.Error(), "invalid_request_error", "model")
@@ -561,14 +579,14 @@ func (g *Gateway) forwardSystemOne(w http.ResponseWriter, r *http.Request, body 
 		}
 		keyID, channel, anonymous := requestCredential(requestCtx)
 		if !errors.Is(err, context.DeadlineExceeded) && wire.ClientCanceled(r.Context(), err) {
-			g.logger.Debug("client canceled before upstream response", "component", "upstream", "event", "request_canceled", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous)
+			g.logger.Debug("client canceled before upstream response", "component", "upstream", "event", "request_canceled", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol))
 			if meta != nil {
 				meta.Outcome = "client_canceled"
 			}
 			wire.WriteError(w, wire.SystemOne, statusClientClosedRequest, "client closed request", "client_canceled", ids.Request)
 			return
 		}
-		g.logger.Warn("all upstream attempts failed", "component", "upstream", "event", "request_failed", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "error", err)
+		g.logger.Warn("all upstream attempts failed", "component", "upstream", "event", "request_failed", "request_id", ids.Request, "tier", finalTier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol), "error", err)
 		if errors.Is(err, errProxyUnavailable) {
 			wire.WriteError(w, wire.SystemOne, http.StatusServiceUnavailable, proxyUnavailableMessage, "proxy_error", ids.Request)
 			return
@@ -619,6 +637,280 @@ func (g *Gateway) forwardSystemOne(w http.ResponseWriter, r *http.Request, body 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(responseBody)
+}
+
+// handleEmbeddings serves POST /v1/embeddings. The OpenAI embeddings protocol
+// is relayed verbatim: the body is forwarded unchanged to the Go plan's
+// embedding endpoint (upstream.go_embeddings) and the upstream JSON answer is
+// returned as-is. No message protocol has an embedding equivalent, so nothing
+// is converted and streaming is rejected. Embedding models are documented
+// separately from the chat catalog, so an ID the catalog has never seen is
+// forwarded and left for the upstream to validate; a model the catalog does
+// know must be an embedding model.
+func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			wire.WriteError(w, wire.Embeddings, http.StatusRequestEntityTooLarge, "request body is larger than 32 MiB", "invalid_request_error", "")
+			return
+		}
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "request body is unreadable", "invalid_request_error", "")
+		return
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "request body must be a JSON object", "invalid_request_error", "")
+		return
+	}
+	model := jsonutil.StringAt(payload, "model")
+	meta := telemetry.MetaFromRequest(r)
+	if meta != nil {
+		meta.Model = model
+	}
+	if model == "" {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "model is required", "invalid_request_error", "model")
+		return
+	}
+	if payload["input"] == nil {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "input is required", "invalid_request_error", "input")
+		return
+	}
+	if jsonutil.BoolAt(payload, "stream") {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "embeddings do not support streaming", "invalid_request_error", "stream")
+		return
+	}
+	if g.catalog.Known(model) && !g.catalog.EmbeddingModel(model) {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, fmt.Sprintf("model %q is not an embedding model; send it to /v1/chat/completions, /v1/responses, or /v1/messages", model), "invalid_request_error", "model")
+		return
+	}
+	if listed, fetched := g.catalog.Advertised(model, config.TierGo); g.catalog.Known(model) && fetched && !listed {
+		// The Go plan does not include this model; forwarding would only earn a
+		// plan-scoped rejection from the upstream. An ID the catalog has never
+		// seen is still forwarded for the upstream to validate.
+		wire.WriteError(w, wire.Embeddings, http.StatusNotFound, fmt.Sprintf("model %q is not part of the go plan; /v1/embeddings is served by the go plan only", model), "model_not_found", "model")
+		return
+	}
+	if g.goNodes.Len() == 0 {
+		// Embeddings are served by the Go plan only, so without a Go key there
+		// is nothing to forward to. Failing here is clearer than sending an
+		// unauthenticated request upstream.
+		wire.WriteError(w, wire.Embeddings, http.StatusServiceUnavailable, "embeddings require at least one go_keys entry", "configuration_error", "")
+		return
+	}
+	route := models.Route{
+		ID: model, Tier: config.TierGo, Protocol: wire.Embeddings,
+		Protocols: map[config.Tier]wire.Protocol{config.TierGo: wire.Embeddings},
+		KeyTiers:  []config.Tier{config.TierGo},
+	}
+	if meta != nil {
+		meta.Tier = string(route.Tier)
+		meta.Protocol = route.Protocol
+	}
+	ids := identity.DeriveRequestIDs(r, payload, callerScope(r.Context()))
+	if meta != nil {
+		meta.Request = ids.Request
+		meta.Session = ids.Session
+	}
+	requestCtx, cancel := context.WithTimeout(r.Context(), time.Duration(g.cfg.Retry.TimeoutSeconds)*time.Second)
+	defer cancel()
+	resp, err := g.doEmbeddingsUpstream(requestCtx, route, body, ids)
+	if err != nil {
+		keyID, channel, anonymous := requestCredential(requestCtx)
+		if !errors.Is(err, context.DeadlineExceeded) && wire.ClientCanceled(r.Context(), err) {
+			g.logger.Debug("client canceled before upstream response", "component", "upstream", "event", "request_canceled", "request_id", ids.Request, "tier", route.Tier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol))
+			if meta != nil {
+				meta.Outcome = "client_canceled"
+			}
+			wire.WriteError(w, wire.Embeddings, statusClientClosedRequest, "client closed request", "client_canceled", ids.Request)
+			return
+		}
+		g.logger.Warn("all upstream attempts failed", "component", "upstream", "event", "request_failed", "request_id", ids.Request, "tier", route.Tier, "key_id", keyID, "channel", channel, "anonymous", anonymous, "model", route.ID, "protocol", string(route.Protocol), "error", err)
+		if errors.Is(err, errProxyUnavailable) {
+			wire.WriteError(w, wire.Embeddings, http.StatusServiceUnavailable, proxyUnavailableMessage, "proxy_error", ids.Request)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			status, message, code := timeoutStatus(err, requestCtx.Err() == nil)
+			wire.WriteError(w, wire.Embeddings, status, message, code, ids.Request)
+			return
+		}
+		wire.WriteError(w, wire.Embeddings, http.StatusBadGateway, "all upstream attempts failed", "upstream_error", ids.Request)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("x-request-id", ids.Request)
+	if resp.StatusCode/100 != 2 {
+		copyErrorResponse(w, wire.Embeddings, resp, ids.Request)
+		return
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		wire.WriteError(w, wire.Embeddings, http.StatusBadGateway, "failed to read upstream response", "upstream_error", ids.Request)
+		return
+	}
+	if usage, reported := wire.ResponseUsage(route.Protocol, responseBody); meta != nil {
+		meta.Usage, meta.UsageReported = usage, reported
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(responseBody)
+}
+
+// embeddingsEndpoint joins the configured embeddings base with the route
+// segment. A base that already ends in a version segment ("/v1", as the
+// default /inference/go/openai/v1 does) gets only "/embeddings"; anything
+// else gets "/v1/embeddings".
+func embeddingsEndpoint(baseURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(trimmed, "/v1") {
+		return trimmed + "/embeddings"
+	}
+	return trimmed + "/v1/embeddings"
+}
+
+// upstreamEmbeddingsRequest builds the POST for one embeddings attempt. The
+// body is forwarded unchanged, and the request carries no session, project or
+// affinity headers: the embedding endpoint does not require them, and sending
+// them would only widen the request surface.
+func upstreamEmbeddingsRequest(ctx context.Context, baseURL string, body []byte, key string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, embeddingsEndpoint(baseURL), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", httpx.V2UserAgent())
+	req.Header.Set("Authorization", "Bearer "+key)
+	return req, nil
+}
+
+// doEmbeddingsUpstream sends one embeddings request through the Go keys,
+// starting from the session's affinity key, for at most Retry.MaxAttempts
+// attempts. The body is never shaped or converted: an embedding request is
+// not agent traffic, and the vectors must describe exactly the caller's input.
+// A 2xx ends the loop, and so does a non-retryable 4xx, which is returned as
+// is. Every attempt feeds observeKeyResult, so a failing key or proxy cools
+// exactly as it does on the chat path. It returns the last response (body
+// still open), else the last error.
+func (g *Gateway) doEmbeddingsUpstream(ctx context.Context, route models.Route, body []byte, ids identity.RequestIDs) (*http.Response, error) {
+	var lastResponse *http.Response
+	var lastErr error
+	nodes := g.goNodes
+	baseURL := g.cfg.Upstream.GoEmbeddings
+	if nodes.Len() == 0 {
+		return nil, errors.New("upstream.go_embeddings requires at least one go_keys entry")
+	}
+	if override, selected := debugKeyOverrideFrom(ctx); selected {
+		// A Playground request pins one key and makes no failover, and it
+		// deliberately leaves pool state alone, so a diagnostic embedding call
+		// never cools a production key.
+		if override.Tier != config.TierGo {
+			return nil, errors.New("embeddings are served by the go tier; select a Go key")
+		}
+		node := nodes.NodeByID(override.KeyID)
+		if node == nil {
+			return nil, errors.New("selected go key is no longer configured")
+		}
+		proxy := nodes.Proxy(node)
+		if pinned, ok := g.relayPin(ctx, proxy); ok {
+			proxy = pinned
+		}
+		if proxy == nil {
+			return nil, errors.New("selected upstream key has no proxy binding")
+		}
+		keyID := config.KeyDisplayID(node.key)
+		setRequestCredential(ctx, config.TierGo, keyID, "key", false, proxy)
+		if meta := telemetry.MetaFromContext(ctx); meta != nil {
+			meta.Attempts = 1
+			meta.Tier = string(config.TierGo)
+		}
+		req, err := upstreamEmbeddingsRequest(ctx, baseURL, body, node.key)
+		if err != nil {
+			return nil, err
+		}
+		if proxy.pool {
+			req.Close = true
+		}
+		started := time.Now()
+		resp, err := doInferenceAttempt(g.inferenceClient(proxy, baseURL, route.ID), req, 0, g.attemptTimeout)
+		duration := time.Since(started)
+		g.recordUpstreamAttempt(ctx, route, ids, 1, keyID, "key", false, proxy, resp, err, duration)
+		if err != nil {
+			return nil, asProxyUnavailable(proxy, err)
+		}
+		return resp, nil
+	}
+	cursor := nodes.CursorFor(ids.Session)
+	attempts := 0
+	for attempts < g.cfg.Retry.MaxAttempts {
+		if ctx.Err() != nil {
+			if lastErr == nil {
+				lastErr = ctx.Err()
+			}
+			break
+		}
+		node := cursor.Next()
+		if node == nil {
+			break
+		}
+		attempts++
+		if meta := telemetry.MetaFromContext(ctx); meta != nil {
+			meta.Attempts = attempts
+			meta.Tier = string(config.TierGo)
+		}
+		if lastResponse != nil {
+			httpx.DrainAndClose(lastResponse.Body)
+			lastResponse = nil
+		}
+		proxy := nodes.Proxy(node)
+		// A relay pin replaces the key's bound proxy for diagnostics.
+		if pinned, ok := g.relayPin(ctx, proxy); ok {
+			proxy = pinned
+		}
+		if proxy == nil {
+			lastErr = errors.New("upstream key has no proxy binding")
+			break
+		}
+		req, err := upstreamEmbeddingsRequest(ctx, baseURL, body, node.key)
+		if err != nil {
+			return nil, err
+		}
+		if proxy.pool {
+			req.Close = true
+		}
+		keyID := config.KeyDisplayID(node.key)
+		setRequestCredential(ctx, config.TierGo, keyID, "key", false, proxy)
+		started := time.Now()
+		resp, err := doInferenceAttempt(g.inferenceClient(proxy, baseURL, route.ID), req, 0, g.attemptTimeout)
+		duration := time.Since(started)
+		if ctx.Err() != nil {
+			lastResponse, lastErr = resp, err
+			if lastErr == nil && lastResponse == nil {
+				lastErr = ctx.Err()
+			}
+			break
+		}
+		g.observeKeyResult(ctx, nodes, node, proxy, resp, err)
+		g.recordUpstreamAttempt(ctx, route, ids, attempts, keyID, "key", false, proxy, resp, err, duration)
+		if err == nil && resp.StatusCode/100 == 2 {
+			return resp, nil
+		}
+		if isNonRetryableClientResponse(resp, err) {
+			return resp, nil
+		}
+		lastResponse = resp
+		if err != nil {
+			lastErr = asProxyUnavailable(proxy, err)
+		}
+	}
+	if lastResponse != nil {
+		return lastResponse, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no usable upstream route")
+	}
+	return nil, lastErr
 }
 
 // prepareRouteBodies encodes input once for each key tier the route may use,

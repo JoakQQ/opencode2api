@@ -57,6 +57,10 @@ pre {
   font-family: var(--font-mono);
 }
 
+.mr-1 {
+  margin-right: var(--sp-1);
+}
+
 :focus-visible {
   outline: 2px solid var(--text-1);
   outline-offset: 2px;

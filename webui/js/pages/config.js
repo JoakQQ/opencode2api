@@ -10,6 +10,9 @@ import { $, $$, bindTabs, el, openDialog, toast } from "../ui.js";
 // the config page on large pools.
 const CHIP_RENDER_LIMIT = 100;
 const expandedChips = new Set();
+// loadedUpstream keeps the fields the form does not render, so saving the page
+// never resets them.
+let loadedUpstream = null;
 
 function renderChips(name) {
   const host = $(`#${name}-chips`);
@@ -90,6 +93,8 @@ function fillConfig(value) {
   $("#c-proxyfile").value = value.proxyfile;
   $("#c-up-zen").value = value.upstream.zen;
   $("#c-up-go").value = value.upstream.go;
+  loadedUpstream = { ...value.upstream };
+  $("#c-up-embeddings").value = value.upstream.go_embeddings || "";
   $("#c-attempts").value = value.retry.max_attempts;
   $("#c-timeout").value = value.retry.timeout_seconds;
   $("#c-refresh").value = value.models.refresh_seconds;
@@ -134,7 +139,14 @@ async function save(event) {
       proxies: secretInputs("proxies"),
       proxyfile: $("#c-proxyfile").value,
       prefer: $("#c-prefer").value,
-      upstream: { zen: $("#c-up-zen").value, go: $("#c-up-go").value },
+      upstream: {
+        zen: $("#c-up-zen").value,
+        go: $("#c-up-go").value,
+        go_embeddings: $("#c-up-embeddings").value.trim(),
+        // The form has no anonymous field, so the loaded value is re-sent;
+        // omitting it would reset a configured /inference origin on save.
+        anonymous: loadedUpstream?.anonymous || "",
+      },
       retry: { max_attempts: numberValue("#c-attempts"), timeout_seconds: numberValue("#c-timeout") },
       models: {
         refresh_seconds: numberValue("#c-refresh"),

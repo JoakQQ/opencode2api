@@ -103,7 +103,8 @@ func (s *Store) migrate() error {
 			usage_requests INTEGER NOT NULL, usage_reported INTEGER NOT NULL,
 			tokens_input INTEGER NOT NULL, tokens_output INTEGER NOT NULL, tokens_cached INTEGER NOT NULL,
 			tokens_reasoning INTEGER NOT NULL, tokens_total INTEGER NOT NULL,
-			usage_models TEXT NOT NULL, usage_tiers TEXT NOT NULL, usage_sessions TEXT NOT NULL, usage_keys TEXT NOT NULL
+			usage_models TEXT NOT NULL, usage_tiers TEXT NOT NULL, usage_sessions TEXT NOT NULL, usage_keys TEXT NOT NULL,
+			usage_protocols TEXT NOT NULL DEFAULT '{}'
 		)`,
 		`CREATE TABLE IF NOT EXISTS upstream_requests (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +112,7 @@ func (s *Store) migrate() error {
 			server_key_id TEXT NOT NULL, model TEXT NOT NULL, tier TEXT NOT NULL, key_id TEXT NOT NULL,
 			channel TEXT NOT NULL, anonymous INTEGER NOT NULL, proxy TEXT NOT NULL,
 			attempts INTEGER NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL,
-			success INTEGER NOT NULL, outcome TEXT NOT NULL
+			success INTEGER NOT NULL, outcome TEXT NOT NULL, protocol TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS upstream_attempts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +139,50 @@ func (s *Store) migrate() error {
 		if _, err := s.db.Exec(statement); err != nil {
 			return fmt.Errorf("apply storage schema: %w", err)
 		}
+	}
+	// A database written before these columns existed keeps its rows; the
+	// added columns default to "no split" for them.
+	for _, column := range []struct{ table, name, definition string }{
+		{"metric_minutes", "usage_protocols", "TEXT NOT NULL DEFAULT '{}'"},
+		{"upstream_requests", "protocol", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumn(column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumn adds a column to an existing table when the schema predates it.
+// table, name and definition are constants from migrate, never user input.
+func (s *Store) addColumn(table, name, definition string) error {
+	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return fmt.Errorf("inspect storage schema: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var (
+			position, notNull, primaryKey int
+			column, kind                  string
+			fallback                      sql.NullString
+		)
+		if err := rows.Scan(&position, &column, &kind, &notNull, &fallback, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("inspect storage schema: %w", err)
+		}
+		if column == name {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect storage schema: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, definition)); err != nil {
+		return fmt.Errorf("apply storage schema: %w", err)
 	}
 	return nil
 }
@@ -254,7 +299,7 @@ func (s *Store) Close() error {
 
 const minuteSelect = `SELECT minute, total, success, errors, duration_ms, histogram, endpoints, models, tiers, statuses,
 	usage_requests, usage_reported, tokens_input, tokens_output, tokens_cached, tokens_reasoning, tokens_total,
-	usage_models, usage_tiers, usage_sessions, usage_keys FROM metric_minutes`
+	usage_models, usage_tiers, usage_sessions, usage_keys, usage_protocols FROM metric_minutes`
 
 // loadMinutes reads the minute buckets starting at from (in unix minutes),
 // oldest first.
@@ -267,18 +312,19 @@ func (s *Store) loadMinutes(from int64) ([]metricBucket, error) {
 	var buckets []metricBucket
 	for rows.Next() {
 		var (
-			bucket                                       metricBucket
-			histogram, endpoints, models, tiers, status  string
-			usageModels, usageTiers, usageSessions, keys string
+			bucket                                                 metricBucket
+			histogram, endpoints, models, tiers, status            string
+			usageModels, usageTiers, usageSessions, keys, supports string
 		)
 		if err := rows.Scan(&bucket.minute, &bucket.total, &bucket.success, &bucket.errors, &bucket.duration, &histogram, &endpoints, &models, &tiers, &status,
 			&bucket.usageRequests, &bucket.usageReported, &bucket.tokens.Input, &bucket.tokens.Output, &bucket.tokens.Cached, &bucket.tokens.Reasoning, &bucket.tokens.Total,
-			&usageModels, &usageTiers, &usageSessions, &keys); err != nil {
+			&usageModels, &usageTiers, &usageSessions, &keys, &supports); err != nil {
 			return nil, fmt.Errorf("read metric minute: %w", err)
 		}
 		bucket.endpoints, bucket.models, bucket.tiers, bucket.statuses = map[string]uint64{}, map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
 		bucket.usageModels, bucket.usageTiers, bucket.usageSessions = map[string]TokenCounts{}, map[string]TokenCounts{}, map[string]TokenCounts{}
 		bucket.usageKeys = map[string]ServerKeyUsage{}
+		bucket.usageProtocols = map[string]TokenCounts{}
 		for _, field := range []struct {
 			raw    string
 			target any
@@ -286,6 +332,7 @@ func (s *Store) loadMinutes(from int64) ([]metricBucket, error) {
 			{histogram, &bucket.histogram}, {endpoints, &bucket.endpoints}, {models, &bucket.models},
 			{tiers, &bucket.tiers}, {status, &bucket.statuses}, {usageModels, &bucket.usageModels},
 			{usageTiers, &bucket.usageTiers}, {usageSessions, &bucket.usageSessions}, {keys, &bucket.usageKeys},
+			{supports, &bucket.usageProtocols},
 		} {
 			if err := json.Unmarshal([]byte(field.raw), field.target); err != nil {
 				return nil, fmt.Errorf("decode metric minute: %w", err)
@@ -327,6 +374,7 @@ func (s *Store) loadLifetime() (totals lifetimeTotals, ok bool, err error) {
 	}
 	totals.Usage.Models, totals.Usage.Tiers = nonNilTokens(totals.Usage.Models), nonNilTokens(totals.Usage.Tiers)
 	totals.Usage.Sessions, totals.Usage.ServerKeys = nonNilTokens(totals.Usage.Sessions), nonNilKeys(totals.Usage.ServerKeys)
+	totals.Usage.Protocols = nonNilTokens(totals.Usage.Protocols)
 	totals.Attempt.Tiers, totals.Attempt.Channels = nonNilAttempts(totals.Attempt.Tiers), nonNilAttempts(totals.Attempt.Channels)
 	totals.Attempt.Keys = nonNilAttempts(totals.Attempt.Keys)
 	return totals, true, nil
@@ -336,7 +384,7 @@ func (s *Store) loadLifetime() (totals lifetimeTotals, ok bool, err error) {
 // first.
 func (s *Store) loadRequests(since time.Time, limit int) ([]UpstreamRequest, error) {
 	rows, err := s.db.Query(`SELECT time, request_id, session, server_key_id, model, tier, key_id, channel,
-		anonymous, proxy, attempts, status, duration_ms, success, outcome
+		anonymous, proxy, attempts, status, duration_ms, success, outcome, protocol
 		FROM upstream_requests WHERE time >= ? ORDER BY time DESC, id DESC LIMIT ?`, since.UnixMilli(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("read requests: %w", err)
@@ -352,7 +400,7 @@ func (s *Store) loadRequests(since time.Time, limit int) ([]UpstreamRequest, err
 		)
 		if err := rows.Scan(&timeValue, &request.RequestID, &request.Session, &request.ServerKeyID, &request.Model, &request.Tier,
 			&request.KeyID, &request.Channel, &anonymous, &request.Proxy, &request.Attempts, &request.Status,
-			&request.DurationMS, &success, &request.Outcome); err != nil {
+			&request.DurationMS, &success, &request.Outcome, &request.Protocol); err != nil {
 			return nil, fmt.Errorf("read request: %w", err)
 		}
 		request.Time = time.UnixMilli(timeValue).UTC()
@@ -477,12 +525,13 @@ func (s *Store) persistMinute(bucket metricBucket) {
 	usageTiers, _ := json.Marshal(bucket.usageTiers)
 	usageSessions, _ := json.Marshal(bucket.usageSessions)
 	usageKeys, _ := json.Marshal(bucket.usageKeys)
+	usageProtocols, _ := json.Marshal(bucket.usageProtocols)
 	s.enqueue(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO metric_minutes (
 			minute, total, success, errors, duration_ms, histogram, endpoints, models, tiers, statuses,
 			usage_requests, usage_reported, tokens_input, tokens_output, tokens_cached, tokens_reasoning, tokens_total,
-			usage_models, usage_tiers, usage_sessions, usage_keys)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			usage_models, usage_tiers, usage_sessions, usage_keys, usage_protocols)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(minute) DO UPDATE SET
 			total=excluded.total, success=excluded.success, errors=excluded.errors, duration_ms=excluded.duration_ms,
 			histogram=excluded.histogram, endpoints=excluded.endpoints, models=excluded.models, tiers=excluded.tiers,
@@ -490,11 +539,12 @@ func (s *Store) persistMinute(bucket metricBucket) {
 			tokens_input=excluded.tokens_input, tokens_output=excluded.tokens_output, tokens_cached=excluded.tokens_cached,
 			tokens_reasoning=excluded.tokens_reasoning, tokens_total=excluded.tokens_total,
 			usage_models=excluded.usage_models, usage_tiers=excluded.usage_tiers,
-			usage_sessions=excluded.usage_sessions, usage_keys=excluded.usage_keys`,
+			usage_sessions=excluded.usage_sessions, usage_keys=excluded.usage_keys,
+			usage_protocols=excluded.usage_protocols`,
 			bucket.minute, bucket.total, bucket.success, bucket.errors, bucket.duration, string(histogram), string(endpoints),
 			string(models), string(tiers), string(statuses), bucket.usageRequests, bucket.usageReported,
 			bucket.tokens.Input, bucket.tokens.Output, bucket.tokens.Cached, bucket.tokens.Reasoning, bucket.tokens.Total,
-			string(usageModels), string(usageTiers), string(usageSessions), string(usageKeys))
+			string(usageModels), string(usageTiers), string(usageSessions), string(usageKeys), string(usageProtocols))
 		return err
 	})
 }
@@ -522,11 +572,11 @@ func (s *Store) persistLifetime(totals lifetimeTotals) {
 func (s *Store) persistRequest(request UpstreamRequest) {
 	s.enqueue(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO upstream_requests (time, request_id, session, server_key_id, model, tier, key_id,
-			channel, anonymous, proxy, attempts, status, duration_ms, success, outcome)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			channel, anonymous, proxy, attempts, status, duration_ms, success, outcome, protocol)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			request.Time.UnixMilli(), request.RequestID, request.Session, request.ServerKeyID, request.Model, request.Tier,
 			request.KeyID, request.Channel, boolInt(request.Anonymous), request.Proxy, request.Attempts, request.Status,
-			request.DurationMS, boolInt(request.Success), request.Outcome)
+			request.DurationMS, boolInt(request.Success), request.Outcome, request.Protocol)
 		return err
 	})
 }

@@ -42,7 +42,7 @@ func (a *Server) apiKeyViews(cfg config.Config) []APIKeyView {
 		meta := cfg.ServerKeyMetadata[id]
 		name := meta.Name
 		if name == "" {
-			name = fmt.Sprintf("已有 Key %d", i+1)
+			name = fmt.Sprintf("Key %d", i+1)
 		}
 		item := APIKeyView{
 			ID: id, Name: name, Display: config.MaskValue(key), Enabled: !meta.Disabled,

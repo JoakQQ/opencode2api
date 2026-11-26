@@ -112,6 +112,11 @@ func (g *Gateway) probeFreeModel(ctx context.Context, model string) probeResult 
 	if !d.AvailableZen || !g.catalog.Supported(model) {
 		return probeResult{reason: "unsupported_probe"}
 	}
+	if protocol == wire.Embeddings {
+		// The availability probe sends a message-shaped request; an embedding
+		// model has no chat payload to probe with, so it is left to real calls.
+		return probeResult{reason: "not_message_model"}
+	}
 	ids := probeRequestIDs()
 	type lane struct {
 		key, name, baseURL string

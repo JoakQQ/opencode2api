@@ -17,6 +17,10 @@
   --focus-ring: rgba(10, 10, 10, 0.14);
   --overlay: rgba(0, 0, 0, 0.45);
 
+  --bg-chat: #0040ff;
+  --bg-embeddings: #e100ff;
+  --bg-decision: #ff5e00;
+
   --ok: #1a7f37;
   --warn: #9a6700;
   --warn-bg: #fff8c5;
@@ -75,6 +79,10 @@
   --inverse-hover: #cfcfcf;
   --focus-ring: rgba(237, 237, 237, 0.18);
   --overlay: rgba(0, 0, 0, 0.6);
+
+  --bg-chat: #0040ff;
+  --bg-embeddings: #e100ff;
+  --bg-decision: #ff5e00;
 
   --ok: #3fb950;
   --warn: #d29922;

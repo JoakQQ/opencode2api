@@ -14,7 +14,44 @@ import (
 	"opencode2api/internal/config"
 	"opencode2api/internal/httpx"
 	"opencode2api/internal/identity"
+	modelcatalog "opencode2api/internal/models"
+	wire "opencode2api/internal/protocol"
 )
+
+// modelView is one row of the quota page's catalog table. Tags names the
+// protocol families the model serves in the console's own terms — "chat" for
+// the Chat, Responses and Anthropic protocols, "decision" for System One and
+// "embeddings" for the Embeddings endpoint — so a model stays recognizable
+// whichever upstream protocol carries it. Zen and Go report which tiers
+// advertise the model, because only Go models draw on the shared quota.
+type modelView struct {
+	ID       string   `json:"id"`
+	Protocol string   `json:"protocol"`
+	Tags     []string `json:"tags"`
+	Zen      bool     `json:"available_zen"`
+	Go       bool     `json:"available_go"`
+}
+
+// modelTags lists the protocol families of a route's catalog entry, in a
+// stable order so the page does not reorder its badges between refreshes. An
+// unrecognized protocol keeps its own name, so a new family is visible instead
+// of silently showing no tag.
+func modelTags(model modelcatalog.RouteDiagnostic) []string {
+	protocols := []wire.Protocol{model.NativeProtocols[config.TierZen], model.NativeProtocols[config.TierGo], model.NativeProtocol}
+	tags := make([]string, 0, 3)
+	for _, kind := range []string{"chat", "decision", "embeddings"} {
+		for _, name := range protocols {
+			if name != "" && wire.Kind(name) == kind {
+				tags = append(tags, kind)
+				break
+			}
+		}
+	}
+	if len(tags) == 0 && model.NativeProtocol != "" {
+		tags = append(tags, string(model.NativeProtocol))
+	}
+	return tags
+}
 
 // quotaWindow is one subscription-wide quota window as the Go plan reports it:
 // its status ("ok" or "rate-limited"), the used percentage the upstream gave
@@ -185,16 +222,17 @@ func (a *Server) handleModelQuotas(w http.ResponseWriter, r *http.Request) {
 	a.quotaCache = cache
 	a.quotaMu.Unlock()
 	all, _ := a.manager.DebugModels()
-	type modelView struct {
-		ID       string `json:"id"`
-		Protocol string `json:"protocol"`
-	}
-	models := []modelView{}
+	models := make([]modelView, 0, len(all))
 	for _, model := range all {
-		if model.AvailableGo && model.RouteError == "" {
-			protocol := model.NativeProtocols[config.TierGo]
-			models = append(models, modelView{ID: model.Model, Protocol: string(protocol)})
+		view := modelView{ID: model.Model, Zen: model.AvailableZen, Go: model.AvailableGo, Tags: modelTags(model)}
+		if protocol := model.NativeProtocols[config.TierGo]; model.AvailableGo && protocol != "" {
+			view.Protocol = string(protocol)
+		} else if protocol := model.NativeProtocols[config.TierZen]; model.AvailableZen && protocol != "" {
+			view.Protocol = string(protocol)
+		} else {
+			view.Protocol = string(model.NativeProtocol)
 		}
+		models = append(models, view)
 	}
 	httpx.WriteJSON(w, 200, map[string]any{
 		"models": models, "accounts": accounts, "scope": "shared_subscription", "source": endpoint,

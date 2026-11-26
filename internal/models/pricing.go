@@ -83,8 +83,13 @@ type modelMetadataCache struct {
 // free and keeps the last good response in a cache file so a restart has data
 // before the first refresh.
 type PricingRegistry struct {
-	mu             sync.RWMutex
-	models         map[string]Price
+	mu     sync.RWMutex
+	models map[string]Price
+	// observed holds the prices a plan's /v1/models listing reported. The
+	// listing is the only price source for the decision and embedding models,
+	// which the metadata endpoint does not list, and it stays separate so a
+	// metadata refresh cannot drop it.
+	observed       map[string]Price
 	updatedAt      time.Time
 	nextRefresh    time.Time
 	lastError      string
@@ -107,7 +112,7 @@ func PricingStore(configPath string, logger *slog.Logger) *PricingRegistry {
 		cachePath = configPath + ".models.dev.json"
 	}
 	store := &PricingRegistry{
-		models: make(map[string]Price), cachePath: cachePath, endpoint: metadataDefaultURL,
+		models: make(map[string]Price), observed: make(map[string]Price), cachePath: cachePath, endpoint: metadataDefaultURL,
 		client: &http.Client{Timeout: metadataTimeout}, logger: logger,
 	}
 	if err := store.loadCache(); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -250,12 +255,19 @@ func (store *PricingRegistry) recordError(err error) error {
 }
 
 // Decide reports whether model counts as free. A name containing "free" in any
-// case always qualifies. Otherwise the metadata must list the model, not
-// deprecated, at zero input and output cost; until the metadata is ready only
-// the name rule applies.
+// case always qualifies. Otherwise a price must list the model, not deprecated,
+// at zero input and output cost. Prices come from the metadata endpoint, and for
+// the models it does not list — the decision and embedding models — from the
+// plan's /v1/models listing, which the Source names (metadata_* or listing_*).
+// Until either source is ready only the name rule applies.
 func (store *PricingRegistry) Decide(model string) AnonymousDecision {
 	store.mu.RLock()
 	price, exists := store.models[model]
+	fromListing := false
+	if !exists {
+		price, exists = store.observed[model]
+		fromListing = exists
+	}
 	ready := !store.updatedAt.IsZero() && len(store.models) > 0
 	store.mu.RUnlock()
 	nameFree := isFreeModel(model)
@@ -265,54 +277,103 @@ func (store *PricingRegistry) Decide(model string) AnonymousDecision {
 		}
 		return AnonymousDecision{Allowed: false, Source: source, Known: false}
 	}
-	if !ready {
-		return fallback("metadata_pending")
-	}
 	if !exists {
+		if !ready && len(store.observed) == 0 {
+			return fallback("metadata_pending")
+		}
 		return fallback("metadata_model_missing")
+	}
+	prefix := "metadata_"
+	if fromListing {
+		prefix = "listing_"
 	}
 	decision := AnonymousDecision{
 		Known: true, Deprecated: price.Deprecated, InputCost: price.Input, OutputCost: price.Output,
 	}
-	metadataFree := !price.Deprecated && price.Input != nil && price.Output != nil && *price.Input == 0 && *price.Output == 0
-	if nameFree || metadataFree {
+	pricedFree := !price.Deprecated && price.Input != nil && price.Output != nil && *price.Input == 0 && *price.Output == 0
+	if nameFree || pricedFree {
 		decision.Allowed = true
 		switch {
-		case nameFree && metadataFree:
+		case nameFree && pricedFree:
 			decision.Source = "name_and_metadata_free"
 		case nameFree:
 			decision.Source = "name_free"
 		default:
-			decision.Source = "metadata_free"
+			decision.Source = prefix + "free"
 		}
 		return decision
 	}
 	if price.Deprecated {
-		decision.Source = "metadata_deprecated"
+		decision.Source = prefix + "deprecated"
 		return decision
 	}
 	if price.Input == nil || price.Output == nil {
 		decision.Known = false
-		decision.Source = "metadata_cost_unknown"
+		decision.Source = prefix + "cost_unknown"
 		return decision
 	}
-	decision.Source = "metadata_paid"
+	decision.Source = prefix + "paid"
 	return decision
 }
 
-// Price returns the metadata of model and whether the metadata lists it.
+// Price returns the price of model and whether any source lists it: the
+// metadata endpoint first, then the plan's model listing.
 func (store *PricingRegistry) Price(model string) (Price, bool) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	price, ok := store.models[model]
+	if !ok {
+		price, ok = store.observed[model]
+	}
 	return price, ok
+}
+
+// ObserveListing records the prices a plan's /v1/models listing reported. A
+// model the metadata endpoint already lists keeps its metadata price; the
+// listing fills in the ones it does not know, which is where the decision and
+// embedding models come from. Entries are merged, so a listing that fails to
+// complete cannot erase what another tier reported, and a row without an input
+// price is skipped.
+func (store *PricingRegistry) ObserveListing(entries []ModelEntry) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, entry := range entries {
+		price, ok := entry.listingPrice()
+		if !ok {
+			continue
+		}
+		store.observed[entry.ID] = price
+	}
+}
+
+// listingPrice converts a listing row's cost and limits into the registry's
+// Price shape. It reports false when the row publishes no input price.
+func (e ModelEntry) listingPrice() (Price, bool) {
+	if e.ID == "" || e.Cost == nil || e.Cost.Input == nil {
+		return Price{}, false
+	}
+	return Price{
+		ID: e.ID, Input: e.Cost.Input, Output: e.Cost.Output,
+		CacheRead: e.Cost.CacheRead, CacheWrite: e.Cost.CacheWrite,
+		ContextWindow: e.ContextWindow, MaxInput: e.MaxInput, MaxOutput: e.MaxOutput,
+	}, true
 }
 
 // Snapshot reports the freshness of the metadata; see MetadataSnapshot.
 func (store *PricingRegistry) Snapshot() MetadataSnapshot {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	snapshot := MetadataSnapshot{Ready: !store.updatedAt.IsZero() && len(store.models) > 0, Models: len(store.models), LastError: store.lastError, CachePath: store.cachePath}
+	ready := !store.updatedAt.IsZero() && len(store.models) > 0
+	models := len(store.models)
+	for id := range store.observed {
+		if _, ok := store.models[id]; !ok {
+			models++
+		}
+	}
+	if len(store.observed) > 0 {
+		ready = true
+	}
+	snapshot := MetadataSnapshot{Ready: ready, Models: models, LastError: store.lastError, CachePath: store.cachePath}
 	if !store.updatedAt.IsZero() {
 		updated := store.updatedAt.UTC()
 		snapshot.UpdatedAt = &updated

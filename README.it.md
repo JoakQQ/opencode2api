@@ -11,6 +11,7 @@ L'eseguibile include la WebUI: per eseguire il servizio non servono Node.js né 
 ## Funzionalità
 
 - Risposte JSON e SSE per tutti e tre i protocolli di inferenza.
+- `/v1/embeddings` compatibile con OpenAI per i modelli di embedding OpenCode, inoltrato senza modifiche all'endpoint di embedding dell'upstream.
 - Testo, immagini, ragionamento, function tool, tool call e tool result; contenuti di file quando il protocollo di destinazione li supporta.
 - Pool separati di chiavi Zen e Go, preferenza del tier configurabile, retry e affinità di sessione.
 - Accesso anonimo opzionale a Zen con la credenziale `public` di OpenCode.
@@ -124,6 +125,7 @@ Invia `Authorization: Bearer YOUR_LOCAL_API_KEY` oppure `x-api-key: YOUR_LOCAL_A
 | POST   | `/v1/responses`        | Responses.                                                 |
 | POST   | `/v1/messages`         | Anthropic Messages.                                        |
 | POST   | `/v1/systemone`        | Decisioni strutturate System One.                          |
+| POST   | `/v1/embeddings`       | Embedding OpenAI.                                          |
 | GET    | `/healthz`             | Stato di disponibilità e riepilogo delle risorse.          |
 
 Prima individua un modello disponibile:
@@ -176,17 +178,32 @@ curl http://localhost:8080/v1/systemone \
 
 System One associa uno stato libero a domande tipizzate e restituisce risposte tipizzate. Il payload non condivide la struttura del bridge Chat/Responses: viene inoltrato senza modifiche e non viene mai tradotto. Questo endpoint serve solo modelli con protocollo nativo System One; anche un payload decisionale inviato a un endpoint messaggi (`/v1/chat/completions`, `/v1/responses`) viene inoltrato senza conversione. Le risposte streaming upstream vengono inoltrate così come sono, senza recupero dopo un'interruzione.
 
+**Embeddings**
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EMBEDDING_MODEL_ID","input":["first document","second document"],"encoding_format":"float"}'
+```
+
+`/v1/embeddings` parla il protocollo OpenAI Embeddings verso il client: `model` e `input` sono obbligatori, `input` è una stringa oppure un array di stringhe o di array di token, e `encoding_format`, `dimensions` e `user` vengono inoltrati così come sono. Il body viene inoltrato senza modifiche — nulla viene tradotto, suddiviso o troncato — e il JSON dell'upstream (`data[].embedding` come float o base64, `usage` e ogni altro campo) torna invariato con lo stato dell'upstream; `stream: true` è rifiutato con 400. Le richieste passano solo dal piano Go: `upstream.go_embeddings` (predefinito `https://opencode.ai/inference/go/openai/v1`, quindi la chiamata upstream è `…/openai/v1/embeddings`) con le chiavi Go configurate e senza header di sessione, e l'endpoint risponde 503 quando nessuna voce `go_keys` è configurata. Poiché L'elenco `/v1/models` del piano Go dichiara quali modelli sono embedding, quindi compaiono in `/v1/models` e nella console con `"native_protocol":"embeddings"` e `"supported_endpoints":["/v1/embeddings"]`. Un modello che il catalogo conosce come modello chat viene rifiutato con 400, un modello di embedding non incluso nel piano Go risponde 404 (l'endpoint serve solo il piano Go) e un ID mai visto dal catalogo viene inoltrato perché lo validi l'upstream.
+
+La console mostra gli embedding ovunque compaiano i protocolli chat: la pagina modelli e quote etichetta ogni voce del catalogo con la famiglia di protocolli (`chat`, `decision` o `embeddings`), il banco di prova della pagina diagnostica invia richieste di embedding e riporta la rotta `embeddings`, il registro delle richieste indica il protocollo di ogni richiesta e il grafico dell'andamento token della console operativa impila chat ed embedding nella stessa barra, con una legenda che riporta il totale di ciascuna famiglia nella finestra scelta.
+
 ### Limiti di compatibilità
 
 Le richieste che usano il protocollo nativo dell'upstream conservano i campi specifici del provider. Quelle che passano da un protocollo all'altro usano una rappresentazione comune e non tutte le opzioni hanno un equivalente. Per esempio, i vincoli JSON di Chat e `seed` non vengono inoltrati ad Anthropic Messages. Contenuti o tipi di tool non supportati possono essere rifiutati.
 
-Il gateway espone i percorsi elencati sopra. Non implementa embeddings, caricamento di file, generazione di immagini, né recupero o annullamento di Responses. Non memorizza la cronologia delle conversazioni: i client devono inviarla o usare le funzionalità supportate dall'upstream effettivo.
+Il gateway espone i percorsi elencati sopra. Non implementa caricamento di file, generazione di immagini, né recupero o annullamento di Responses. Non memorizza la cronologia delle conversazioni: i client devono inviarla o usare le funzionalità supportate dall'upstream effettivo.
 
 ## Instradamento e modelli
 
 ### Rilevamento dei modelli
 
-Il gateway aggiorna `/v1/models` di Zen/Go e il [catalogo delle capacità](https://models.opencode.ai/api.json) di OpenCode all'intervallo configurato. Protocolli nativi e limiti dei modelli sono tracciati separatamente per ogni tier. La documentazione Zen/Go di OpenCode è una fonte di ripiego per il rilevamento del protocollo.
+Il gateway aggiorna `/v1/models` di Zen/Go e il [catalogo delle capacità](https://models.opencode.ai/api.json) di OpenCode all'intervallo configurato. È l'elenco per piano a delimitare la disponibilità: ogni chiave elenca i modelli che il proprio abbonamento può usare e ogni riga dichiara un `type` — `chat`, `decision` o `embedding` (i tipi media come `image`, `realtime` e `video` sono elencati ma non instradabili). Il catalogo delle capacità non contiene informazioni sull'abbonamento e non elenca affatto i modelli decision o embedding, quindi fornisce limiti, prezzi e il protocollo Chat/Responses/Messages dei modelli chat, mentre il tipo dichiarato nell'elenco decide il resto: una dichiarazione `decision` o `embedding` è autorevole, una dichiarazione `chat` riempie solo un protocollo che nessun'altra fonte conosce, così una rotta Messages documentata continua a prevalere. Protocolli nativi e limiti dei modelli sono tracciati separatamente per ogni tier e la documentazione Zen/Go di OpenCode affina il rilevamento del protocollo per modello.
+
+Vengono pubblicati solo i modelli che le credenziali configurate possono davvero instradare. Il tier Go è esattamente l'elenco restituito dalla chiave Go, il tier Zen è l'elenco della chiave Zen oppure — con la sola corsia anonima attiva — il sottoinsieme gratuito dell'elenco pubblico, e un tier senza alcuna credenziale viene svuotato invece di conservare quanto scoperto da una configurazione precedente. Un'installazione con la sola chiave Go e `anonymous: false` espone quindi esattamente i modelli del piano Go.
 
 `models.protocols` permette di sovrascrivere il rilevamento:
 
@@ -201,9 +218,9 @@ Il gateway aggiorna `/v1/models` di Zen/Go e il [catalogo delle capacità](https
 }
 ```
 
-I valori di protocollo consentiti sono `chat`, `responses` e `anthropic`. I modelli con protocolli nativi non supportati vengono esclusi dal rilevamento, a meno che non siano sovrascritti.
+I valori di protocollo consentiti sono `chat`, `responses`, `anthropic`, `systemone` ed `embeddings`. I modelli il cui tipo dichiarato non è gestibile dal gateway vengono esclusi dal rilevamento, a meno che non siano sovrascritti.
 
-Costi, stato di deprecazione e limiti dei modelli provengono dall'[endpoint ufficiale dei metadati OpenCode](https://models.opencode.ai/api.json), aggiornato ogni 24 ore. Il catalogo delle capacità di OpenCode resta la fonte autorevole per i limiti di contesto e token; i metadati `limit.context`, `limit.input` e `limit.output` completano i campi mancanti. `/v1/models` espone questi limiti come `context_window`/`context_length`, `max_input` e `max_output` per client di rilevamento quali CLIProxyAPI e Pi. Ogni client HTTP attende al massimo 30 secondi per una richiesta di metadati. Gli aggiornamenti non riusciti conservano i dati esistenti.
+Costi, stato di deprecazione e limiti dei modelli provengono dall'[endpoint ufficiale dei metadati OpenCode](https://models.opencode.ai/api.json), aggiornato ogni 24 ore. Quel catalogo non elenca i modelli decision ed embedding, quindi prezzi e limiti arrivano dall'elenco `/v1/models` del piano che li serve — gli stessi dati con cui la corsia anonima distingue un modello gratuito da uno a pagamento, mostrati nella console come `listing_free` o `listing_paid`. Il catalogo delle capacità di OpenCode resta la fonte autorevole per i limiti di contesto e token; i metadati `limit.context`, `limit.input` e `limit.output` completano i campi mancanti. `/v1/models` espone questi limiti come `context_window`/`context_length`, `max_input` e `max_output` per client di rilevamento quali CLIProxyAPI e Pi. Ogni client HTTP attende al massimo 30 secondi per una richiesta di metadati. Gli aggiornamenti non riusciti conservano i dati esistenti.
 
 Quando i metadati indicano un prezzo, ogni elemento di `/v1/models` include anche `cost` (USD per milione di token: `input`, `output`, `cache_read`, `cache_write`, oltre a `cacheRead`/`cacheWrite` di OpenClaw). I modelli con ragionamento elencano i livelli in `reasoning_efforts` e in `compat.supportedReasoningEfforts` di OpenClaw: da `minimal` a `max`, limitati al livello massimo verificato quando il livello del modello è `auto`. Un livello forzato o verificato è esposto come `default_reasoning_effort`. I prezzi della cache compaiono dopo il successivo aggiornamento dei metadati.
 
@@ -295,6 +312,7 @@ Consulta [config.example.json](config.example.json) per una configurazione inizi
 | `prefer`                    | `go`; accetta `go` o `zen`.                                                   |
 | `upstream.zen`              | `https://opencode.ai/inference/openai`.                                       |
 | `upstream.go`               | `https://opencode.ai/zen/go`.                                                 |
+| `upstream.go_embeddings`    | `https://opencode.ai/inference/go/openai/v1`; base degli embedding del piano Go. `/v1/embeddings` aggiunge solo `/embeddings`, quindi una base che termina già con `/v1` viene usata così com'è. |
 | `proxies`                   | Fallback a `["direct"]` se entrambe le fonti proxy sono vuote.              |
 | `proxyfile`                 | Opzionale; i percorsi relativi sono risolti accanto al file di configurazione. |
 | `models.refresh_seconds`    | `300`; minimo 1.                                                              |

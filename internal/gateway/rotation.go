@@ -21,12 +21,14 @@ import (
 )
 
 // syncRotation tells the rotation manager which catalog models the Go tier can
-// serve right now: every model with a Go route except System One models, and
-// none while no Go key is configured.
+// serve right now: every model with a Go route except System One and Embeddings
+// models, and none while no Go key is configured. The rotation groups answer
+// message-shaped requests, so a model that is not message-shaped never joins.
 func (g *Gateway) syncRotation() {
 	available := map[string]bool{}
 	for _, model := range g.catalog.List() {
-		if route, err := g.catalog.RouteForTier(model, config.TierGo, false, g.goNodes.Len() > 0); err == nil && route.Protocol != wire.SystemOne {
+		if route, err := g.catalog.RouteForTier(model, config.TierGo, false, g.goNodes.Len() > 0); err == nil &&
+			route.Protocol != wire.SystemOne && route.Protocol != wire.Embeddings {
 			available[model] = true
 		}
 	}
@@ -111,6 +113,12 @@ func (g *Gateway) handleRotation(w http.ResponseWriter, r *http.Request, externa
 		visited[token.Model] = true
 		route, err := g.catalog.RouteForTier(token.Model, config.TierGo, false, g.goNodes.Len() > 0)
 		if err != nil {
+			continue
+		}
+		if route.Protocol != wire.Chat && route.Protocol != wire.Responses && route.Protocol != wire.Anthropic {
+			// A stored order may still name a model that is not message-shaped;
+			// it cannot answer this request, so it is skipped like an
+			// unavailable model.
 			continue
 		}
 		counted := false

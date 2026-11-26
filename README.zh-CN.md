@@ -11,6 +11,7 @@ WebUI 内嵌在可执行文件中，运行服务无需 Node.js 或数据库。
 ## 功能
 
 - 三种推理协议之间的普通 JSON 响应与 SSE 流式转换。
+- 兼容 OpenAI 的 `/v1/embeddings`：OpenCode 嵌入模型的请求原样转发到上游嵌入接口。
 - 文本、图片、reasoning、函数工具、工具调用和工具结果；目标协议允许时支持文件内容转换。
 - 独立的 Zen / Go Key 池，可配置优先级、重试和会话亲和性。
 - 使用 OpenCode `public` 凭证的可选 Zen 匿名通道。
@@ -124,6 +125,7 @@ docker run -d --name opencode2api \
 | POST | `/v1/responses`        | Responses。                |
 | POST | `/v1/messages`         | Anthropic Messages。       |
 | POST | `/v1/systemone`        | System One 结构化决策。    |
+| POST | `/v1/embeddings`       | OpenAI 嵌入（Embeddings）。 |
 | GET  | `/healthz`             | 就绪状态与资源汇总。       |
 
 先获取可用模型：
@@ -176,17 +178,32 @@ curl http://localhost:8080/v1/systemone \
 
 System One 将自由文本状态与类型化问题配对，并返回类型化答案，因此其负载与 chat/responses 桥接结构完全不同，只做原样转发，不做任何转换。只有原生协议为 System One 的模型才能在本接口提供服务；在消息接口（`/v1/chat/completions`、`/v1/responses`）上提交的决策负载同样原样转发，而不经过转换。上游的流式回复按原样透传，不做中断恢复。
 
+**Embeddings（嵌入）**
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EMBEDDING_MODEL_ID","input":["first document","second document"],"encoding_format":"float"}'
+```
+
+`/v1/embeddings` 对下游使用 OpenAI Embeddings 协议：`model` 与 `input` 必填，`input` 可为字符串，或字符串/令牌数组组成的数组，`encoding_format`、`dimensions` 与 `user` 按原样转发。请求体原样转发——不转换、不拆分、不截断——上游 JSON（`data[].embedding` 浮点或 base64、`usage` 及其他字段）与上游状态码一并返回；`stream: true` 返回 400。嵌入请求只走 Go 套餐：使用 `upstream.go_embeddings`（默认 `https://opencode.ai/inference/go/openai/v1`，实际调用 `…/openai/v1/embeddings`）与已配置的 Go Key，不发送会话头；未配置 `go_keys` 时返回 503。Go 套餐的 `/v1/models` 列表会声明哪些模型是嵌入模型，因此它们会出现在 `/v1/models` 与控制台中，并带 `"native_protocol":"embeddings"` 与 `"supported_endpoints":["/v1/embeddings"]`。目录已知为聊天模型的 ID 返回 400，不在 Go 套餐内的嵌入模型返回 404（此端点只对接 Go 套餐），目录从未见过的 ID 则直接转发给上游校验。
+
+控制台在聊天协议出现的所有位置同样展示嵌入模型：模型与额度页为每个目录条目标注协议家族（`chat`、`decision` 或 `embeddings`），诊断页的请求台可以直接发送嵌入请求并显示 `embeddings` 路由，请求路由表记录每个请求的协议，运维台的 Token 趋势图把 chat 与 embeddings 堆叠在同一根柱子上，图例同时给出各家族在当前时间范围内的总量。
+
 ### 协议兼容边界
 
 客户端协议与上游原生协议相同时，会保留供应商特有字段。跨协议请求经过统一中间结构转换，部分参数没有等价表达。例如，Chat 的 JSON 输出约束与 `seed` 不会被转发到 Anthropic Messages。不支持的内容块或工具类型可能被拒绝。
 
-网关仅实现上表中的接口，不提供 embeddings、文件上传、图像生成、Responses 查询或取消接口。网关不保存会话历史；客户端需要提交历史，或使用实际上游支持的相关能力。
+网关仅实现上表中的接口，不提供文件上传、图像生成、Responses 查询或取消接口。网关不保存会话历史；客户端需要提交历史，或使用实际上游支持的相关能力。
 
 ## 路由与模型
 
 ### 模型发现
 
-服务按配置周期刷新 Zen / Go 的 `/v1/models` 和 OpenCode [能力目录](https://models.opencode.ai/api.json)，分别记录两个 Tier 的原生协议与模型限制。OpenCode 的 Zen / Go 文档作为协议发现的回退来源。
+服务按配置周期刷新 Zen / Go 的 `/v1/models` 和 OpenCode [能力目录](https://models.opencode.ai/api.json)。套餐可用性由按 Key 拉取的模型列表决定：每个 Key 的列表只包含该订阅可用的模型，且每行都声明 `type`（`chat`、`decision` 或 `embedding`；`image`、`realtime`、`video` 等媒体类型会列出但不可路由）。能力目录不含订阅信息，也完全不列 decision 与 embedding 模型，因此它提供聊天模型的限制、价格与 Chat / Responses / Messages 协议，其余协议由列表声明的类型决定：`decision` 与 `embedding` 声明优先，`chat` 声明只补齐其他来源未知的协议，因此已记录的 Messages 路由仍然优先。两个 Tier 的原生协议与模型限制分别记录，OpenCode 的 Zen / Go 文档再按模型细化协议发现。
+
+只发布已配置凭据真正可路由的模型：Go Tier 就是 Go Key 返回的列表；Zen Tier 为 Zen Key 的列表，或仅启用匿名通道时公开列表中的免费子集；完全没有凭据的 Tier 会被清空，而不是保留旧配置发现的结果。因此只配 Go Key 且 `anonymous: false` 时，暴露的正是 Go 套餐的模型。
 
 可通过 `models.protocols` 覆盖自动发现结果：
 
@@ -203,7 +220,7 @@ System One 将自由文本状态与类型化问题配对，并返回类型化答
 
 协议值仅允许 `chat`、`responses`、`anthropic`。使用不支持的原生协议的模型会从模型列表中隐藏，除非配置了覆盖值。
 
-成本、弃用信息及模型限制来自官方 [OpenCode 元数据地址](https://models.opencode.ai/api.json)，每 24 小时刷新一次。能力目录中的限制优先；元数据中的 `limit.context`、`limit.input` 和 `limit.output` 仅补充缺失字段，通过 `/v1/models` 的 `context_window` / `context_length`、`max_input`、`max_output` 暴露。每个 HTTP 客户端的拉取超时为 30 秒，刷新失败时保留已有数据。升级后继续兼容原有 `.models.dev.json` 缓存文件名，无需删除缓存。
+成本、弃用信息及模型限制来自官方 [OpenCode 元数据地址](https://models.opencode.ai/api.json)，每 24 小时刷新一次。该元数据不列出 decision 与 embedding 模型，因此它们的价格与限制来自服务该模型的套餐的 `/v1/models` 列表——匿名通道也用它判断模型是否免费，控制台将其标记为 `listing_free` 或 `listing_paid`。能力目录中的限制优先；元数据中的 `limit.context`、`limit.input` 和 `limit.output` 仅补充缺失字段，通过 `/v1/models` 的 `context_window` / `context_length`、`max_input`、`max_output` 暴露。每个 HTTP 客户端的拉取超时为 30 秒，刷新失败时保留已有数据。升级后继续兼容原有 `.models.dev.json` 缓存文件名，无需删除缓存。
 
 元数据给出价格时，`/v1/models` 的每个条目还会带上 `cost`（每百万 token 的美元价格：`input`、`output`、`cache_read`、`cache_write`，以及 OpenClaw 使用的 `cacheRead` / `cacheWrite`）。推理模型会在 `reasoning_efforts` 和 OpenClaw 读取的 `compat.supportedReasoningEfforts` 中列出可用档位：`minimal` 到 `max`；思考强度为 `auto` 时截止到探测得到的上限。强制或探测得到的档位通过 `default_reasoning_effort` 给出。缓存价格字段会在下一次元数据刷新后出现。
 
@@ -297,6 +314,7 @@ Key 初始化时均衡分配到代理。真实流量可以触发代理检查、K
 | `prefer`                    | `go`；可选 `go`、`zen`。                                                              |
 | `upstream.zen`              | `https://opencode.ai/zen`。                                                           |
 | `upstream.go`               | `https://opencode.ai/zen/go`。                                                        |
+| `upstream.go_embeddings`    | `https://opencode.ai/inference/go/openai/v1`；Go 套餐的嵌入接口基址。`/v1/embeddings` 只追加 `/embeddings`，因此以 `/v1` 结尾的基址会直接使用。 |
 | `upstream.anonymous`        | `https://opencode.ai/inference`；匿名通道优先使用，失败后回退到 `/zen`。             |
 | `proxies`                   | 两个代理来源都为空时，使用 `["direct"]`。                                             |
 | `proxyfile`                 | 可选；相对路径基于配置文件所在目录解析。                                              |
